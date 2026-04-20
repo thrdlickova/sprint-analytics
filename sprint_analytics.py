@@ -54,11 +54,22 @@ div[data-testid="stAlert"]{background:#fff!important;border:1px solid #e2e8f0!im
 .sec-hdr{display:flex;align-items:center;gap:12px;margin:2.2rem 0 1rem;padding-bottom:.8rem;border-bottom:1px solid #e2e8f0}
 .sec-icon{width:34px;height:34px;background:#eff6ff;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:17px}
 .sec-ttl{font-size:1.15rem;font-weight:600;color:#0f172a!important}
-/* Tooltip na metrikách */
+/* File uploader — světlý vždy */
+[data-testid="stFileUploader"],[data-testid="stFileUploaderDropzone"]{background:#fff!important;color:#475569!important}
+[data-testid="stFileUploaderDropzone"] *{color:#475569!important}
+/* Tooltip */
 .mc{position:relative;cursor:default}
-.mc-tooltip{display:none;position:absolute;bottom:calc(100% + 8px);left:50%;transform:translateX(-50%);background:#1e293b;color:#f1f5f9;font-size:.78rem;line-height:1.5;padding:.6rem .9rem;border-radius:9px;width:220px;text-align:left;z-index:999;box-shadow:0 4px 12px rgba(0,0,0,.15);pointer-events:none;}
-.mc-tooltip::after{content:'';position:absolute;top:100%;left:50%;transform:translateX(-50%);border:5px solid transparent;border-top-color:#1e293b;}
-.mc:hover .mc-tooltip{display:block;}
+.mc-tooltip{
+  visibility:hidden;opacity:0;
+  position:absolute;bottom:calc(100% + 10px);left:50%;transform:translateX(-50%);
+  background:#1e293b;color:#f1f5f9!important;font-size:.78rem!important;line-height:1.55;
+  padding:.65rem .95rem;border-radius:10px;width:230px;text-align:left;
+  z-index:9999;pointer-events:none;
+  transition:opacity .15s ease, visibility .15s ease;
+  box-shadow:0 4px 16px rgba(0,0,0,.18);
+}
+.mc-tooltip::after{content:'';position:absolute;top:100%;left:50%;transform:translateX(-50%);border:6px solid transparent;border-top-color:#1e293b;}
+.mc:hover .mc-tooltip{visibility:visible;opacity:1;}
 .dt{width:100%;border-collapse:collapse;font-size:13px;font-family:'Inter',sans-serif;border-radius:12px;overflow:hidden;border:1px solid #e2e8f0;background:#fff}
 .dt thead tr{background:#f8fafc}
 .dt th{padding:9px 13px;text-align:left;font-size:.66rem;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:#94a3b8;font-family:'JetBrains Mono',monospace;border-bottom:1px solid #e2e8f0}
@@ -332,27 +343,50 @@ def draw_burndown(issues_df, mapping, sprint_start, sprint_end):
 # ─────────────────────────────────────────────
 
 def draw_time_by_type(df, mapping):
-    """Graf: celkový vykázaný čas podle typu issue."""
+    """Koláčový graf: vykázaný čas podle typu issue."""
     type_col = mapping.get("type"); id_col = mapping.get("id", df.columns[0])
     tc = [mapping.get(k) for k in ["time_todo","time_progress","time_review","time_testing","time_blocked"] if mapping.get(k) and mapping.get(k) in df.columns]
     if not type_col or not tc: return None
     uniq = df.groupby(id_col).first().reset_index()
     uniq["_total_h"] = sum(pd.to_numeric(uniq[c], errors="coerce").fillna(0) for c in tc)
     by_type = uniq.groupby(type_col)["_total_h"].sum().reset_index()
-    by_type = by_type[by_type["_total_h"] > 0].sort_values("_total_h", ascending=True)
+    by_type = by_type[by_type["_total_h"] > 0]
     if by_type.empty: return None
-    colors = {"Story":"#2563eb","Bug":"#ef4444","Bug Subtask":"#f59e0b"}
-    bar_colors = [colors.get(t, "#94a3b8") for t in by_type[type_col]]
-    fig, ax = plt.subplots(figsize=(8, 2.2))
+
+    colors_map = {"Story": "#2563eb", "Bug": "#ef4444", "Bug Subtask": "#f59e0b"}
+    pie_colors = [colors_map.get(t, "#94a3b8") for t in by_type[type_col]]
+    total_h = by_type["_total_h"].sum()
+
+    fig, ax = plt.subplots(figsize=(5, 4))
     fig.patch.set_facecolor("#ffffff"); ax.set_facecolor("#ffffff")
-    bars = ax.barh(by_type[type_col], by_type["_total_h"], color=bar_colors, height=0.45, edgecolor="none")
-    for bar, val in zip(bars, by_type["_total_h"]):
-        ax.text(bar.get_width()+5, bar.get_y()+bar.get_height()/2, f"{val:.0f}h", va="center", fontsize=10, color="#475569")
-    ax.set_xlabel("Celkem hodin", color="#94a3b8", fontsize=9)
-    for spine in ax.spines.values(): spine.set_edgecolor("#e2e8f0")
-    ax.tick_params(colors="#475569", labelsize=10)
-    ax.set_facecolor("#ffffff")
-    plt.tight_layout(pad=0.4)
+
+    wedges, texts, autotexts = ax.pie(
+        by_type["_total_h"],
+        labels=None,
+        colors=pie_colors,
+        autopct=lambda p: f"{p:.0f}%",
+        startangle=90,
+        pctdistance=0.72,
+        wedgeprops={"edgecolor": "#ffffff", "linewidth": 2.5},
+    )
+    for at in autotexts:
+        at.set_fontsize(11)
+        at.set_fontweight("bold")
+        at.set_color("#ffffff")
+
+    # Střed — celkový čas
+    ax.text(0, 0, f"{total_h:.0f}h", ha="center", va="center",
+            fontsize=15, fontweight="bold", color="#0f172a")
+    ax.text(0, -0.18, "celkem", ha="center", va="center",
+            fontsize=9, color="#94a3b8")
+
+    # Legenda
+    legend_labels = [f"{row[type_col]}  {row['_total_h']:.0f}h" for _, row in by_type.iterrows()]
+    ax.legend(wedges, legend_labels, loc="lower center",
+              bbox_to_anchor=(0.5, -0.12), ncol=len(by_type),
+              frameon=False, fontsize=9,
+              labelcolor="#475569")
+    plt.tight_layout(pad=0.3)
     return fig
 
 def draw_unplanned_work(df, mapping):
@@ -841,23 +875,26 @@ if metrics.get("spillover_count", 0) > 0:
 
 st.markdown('<div id="cas"></div>', unsafe_allow_html=True)
 section("⏱", "Vykázaný čas")
-col_t1, col_t2 = st.columns([1, 1])
-with col_t1:
-    st.markdown("<div style='font-size:.76rem;color:#94a3b8;margin-bottom:.5rem;font-family:JetBrains Mono,monospace;text-transform:uppercase;letter-spacing:.07em;'>Čas podle typu issue</div>", unsafe_allow_html=True)
-    fig_type = draw_time_by_type(df, mapping)
-    if fig_type:
+
+# Koláčový graf — celá šířka, centrovaný
+fig_type = draw_time_by_type(df, mapping)
+if fig_type:
+    col_pie_l, col_pie_c, col_pie_r = st.columns([1, 2, 1])
+    with col_pie_c:
+        st.markdown("<div style='font-size:.76rem;color:#94a3b8;text-align:center;margin-bottom:.3rem;font-family:JetBrains Mono,monospace;text-transform:uppercase;letter-spacing:.07em;'>Vykázaný čas podle typu issue</div>", unsafe_allow_html=True)
         st.pyplot(fig_type, use_container_width=True)
         plt.close(fig_type)
-    else:
-        st.info("Chybí data o časech.")
-with col_t2:
-    st.markdown("<div style='font-size:.76rem;color:#94a3b8;margin-bottom:.5rem;font-family:JetBrains Mono,monospace;text-transform:uppercase;letter-spacing:.07em;'>Plánovaná vs. neplánovaná práce</div>", unsafe_allow_html=True)
-    fig_unpl = draw_unplanned_work(df, mapping)
-    if fig_unpl:
-        st.pyplot(fig_unpl, use_container_width=True)
-        plt.close(fig_unpl)
-    else:
-        st.info("Chybí data o časech.")
+else:
+    st.info("Chybí data o časech.")
+
+# Plánovaná vs. neplánovaná — pod koláčem
+st.markdown("<div style='font-size:.76rem;color:#94a3b8;margin-top:1.2rem;margin-bottom:.4rem;font-family:JetBrains Mono,monospace;text-transform:uppercase;letter-spacing:.07em;'>Plánovaná vs. neplánovaná práce</div>", unsafe_allow_html=True)
+fig_unpl = draw_unplanned_work(df, mapping)
+if fig_unpl:
+    st.pyplot(fig_unpl, use_container_width=True)
+    plt.close(fig_unpl)
+else:
+    st.info("Chybí data o časech.")
 
 # Flow efficiency bar
 bars_fl, legend_fl, fe_num = draw_flow_efficiency(df, mapping)
@@ -960,6 +997,23 @@ for i, topic in enumerate(retro_topics, 1):
 <div class="retro-q"><span class="retro-num">{i}</span>{hl.escape(topic['q'])}</div>
 <div class="retro-data">{hl.escape(topic['data'])}</div>
 {signal_html}</div>""", unsafe_allow_html=True)
+
+# JS pro tooltip — zajistí funkčnost v Streamlit
+st.markdown("""<script>
+(function() {
+  function initTooltips() {
+    document.querySelectorAll('.mc').forEach(function(card) {
+      var tip = card.querySelector('.mc-tooltip');
+      if (!tip) return;
+      card.onmouseenter = function() { tip.style.visibility='visible'; tip.style.opacity='1'; };
+      card.onmouseleave = function() { tip.style.visibility='hidden'; tip.style.opacity='0'; };
+    });
+  }
+  setTimeout(initTooltips, 300);
+  setTimeout(initTooltips, 1000);
+  setTimeout(initTooltips, 2500);
+})();
+</script>""", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
 # RAW DATA
