@@ -51,9 +51,14 @@ div[data-testid="stAlert"]{background:#fff!important;border:1px solid #e2e8f0!im
 .goal-achieved{display:inline-block;padding:3px 10px;border-radius:99px;font-size:.74rem;font-weight:600;margin-top:.5rem;background:#dcfce7;color:#15803d}
 .goal-partial{display:inline-block;padding:3px 10px;border-radius:99px;font-size:.74rem;font-weight:600;margin-top:.5rem;background:#fef9c3;color:#a16207}
 .goal-missed{display:inline-block;padding:3px 10px;border-radius:99px;font-size:.74rem;font-weight:600;margin-top:.5rem;background:#fee2e2;color:#b91c1c}
-.sec-hdr{display:flex;align-items:center;gap:10px;margin:2.2rem 0 .9rem;padding-bottom:.7rem;border-bottom:1px solid #e2e8f0}
-.sec-icon{width:28px;height:28px;background:#eff6ff;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:14px}
-.sec-ttl{font-size:.92rem;font-weight:600;color:#0f172a!important}
+.sec-hdr{display:flex;align-items:center;gap:12px;margin:2.2rem 0 1rem;padding-bottom:.8rem;border-bottom:1px solid #e2e8f0}
+.sec-icon{width:34px;height:34px;background:#eff6ff;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:17px}
+.sec-ttl{font-size:1.15rem;font-weight:600;color:#0f172a!important}
+/* Tooltip na metrikách */
+.mc{position:relative;cursor:default}
+.mc-tooltip{display:none;position:absolute;bottom:calc(100% + 8px);left:50%;transform:translateX(-50%);background:#1e293b;color:#f1f5f9;font-size:.78rem;line-height:1.5;padding:.6rem .9rem;border-radius:9px;width:220px;text-align:left;z-index:999;box-shadow:0 4px 12px rgba(0,0,0,.15);pointer-events:none;}
+.mc-tooltip::after{content:'';position:absolute;top:100%;left:50%;transform:translateX(-50%);border:5px solid transparent;border-top-color:#1e293b;}
+.mc:hover .mc-tooltip{display:block;}
 .dt{width:100%;border-collapse:collapse;font-size:13px;font-family:'Inter',sans-serif;border-radius:12px;overflow:hidden;border:1px solid #e2e8f0;background:#fff}
 .dt thead tr{background:#f8fafc}
 .dt th{padding:9px 13px;text-align:left;font-size:.66rem;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:#94a3b8;font-family:'JetBrains Mono',monospace;border-bottom:1px solid #e2e8f0}
@@ -759,19 +764,29 @@ fe_val = metrics.get("flow_efficiency")
 cd_val = metrics.get("commit_done_ratio")
 c1,c2,c3,c4,c5 = st.columns(5)
 with c1:
-    st.markdown(f"""<div class="mc"><div class="mc-label">Velocity</div><div class="mc-value">{metrics.get('velocity','—')}</div><div class="mc-sub">story points</div></div>""", unsafe_allow_html=True)
+    st.markdown(f"""<div class="mc">
+<div class="mc-tooltip">Kolik story points tým dokončil v tomto sprintu. Sleduj jako trend přes více sprintů — jeden sprint nic neříká.</div>
+<div class="mc-label">Velocity</div><div class="mc-value">{metrics.get('velocity','—')}</div><div class="mc-sub">story points</div></div>""", unsafe_allow_html=True)
 with c2:
     c2c = "warn" if ct_val and ct_val > 6 else ""
-    st.markdown(f"""<div class="mc {c2c}"><div class="mc-label">Avg. Cycle Time</div><div class="mc-value">{f"{ct_val} dní" if ct_val else "—"}</div><div class="mc-sub">vytvoření → done</div></div>""", unsafe_allow_html=True)
+    st.markdown(f"""<div class="mc {c2c}">
+<div class="mc-tooltip">Průměrný čas od vytvoření issue po jeho dokončení. Čím kratší, tím lépe. Cíl: pod 5 dní (DORA standard).</div>
+<div class="mc-label">Avg. Cycle Time</div><div class="mc-value">{f"{ct_val} dní" if ct_val else "—"}</div><div class="mc-sub">vytvoření → done</div></div>""", unsafe_allow_html=True)
 with c3:
     c3c = "danger" if sr_val > 30 else ("good" if sr_val < 15 else "warn")
-    st.markdown(f"""<div class="mc {c3c}"><div class="mc-label">Spillover</div><div class="mc-value">{sr_val}%</div><div class="mc-sub">{metrics.get('spillover_count','?')} z {total_issues} issues</div></div>""", unsafe_allow_html=True)
+    st.markdown(f"""<div class="mc {c3c}">
+<div class="mc-tooltip">Spillover = procento issues které se nestihly dokončit a přecházejí do příštího sprintu. Zdravá míra je pod 10%. Vysoký spillover znamená přeplánování nebo opakující se blokery.</div>
+<div class="mc-label">Spillover</div><div class="mc-value">{sr_val}%</div><div class="mc-sub">{metrics.get('spillover_count','?')} z {total_issues} issues</div></div>""", unsafe_allow_html=True)
 with c4:
     c4c = "warn" if fe_val and fe_val < 50 else ("good" if fe_val and fe_val >= 65 else "")
-    st.markdown(f"""<div class="mc {c4c}"><div class="mc-label">Flow Efficiency</div><div class="mc-value">{f"{fe_val}%" if fe_val else "—"}</div><div class="mc-sub">aktivní čas z celku</div></div>""", unsafe_allow_html=True)
+    st.markdown(f"""<div class="mc {c4c}">
+<div class="mc-tooltip">Kolik procent celkového času issues strávily aktivní prací (In Progress, Review, Testing) vs. čekáním (To Do, Blocked). Cíl pro software týmy: 40–65%.</div>
+<div class="mc-label">Flow Efficiency</div><div class="mc-value">{f"{fe_val}%" if fe_val else "—"}</div><div class="mc-sub">aktivní čas z celku</div></div>""", unsafe_allow_html=True)
 with c5:
     c5c = "good" if cd_val and cd_val >= 80 else ("warn" if cd_val and cd_val >= 60 else "danger")
-    st.markdown(f"""<div class="mc {c5c}"><div class="mc-label">Commit / Done</div><div class="mc-value">{f"{cd_val}%" if cd_val else "—"}</div><div class="mc-sub">dokončeno z commitnutého</div></div>""", unsafe_allow_html=True)
+    st.markdown(f"""<div class="mc {c5c}">
+<div class="mc-tooltip">Kolik procent commitnutých story points bylo skutečně dokončeno. Nad 80% = tým plní sliby. Pod 60% = sprint plán neodpovídá realitě.</div>
+<div class="mc-label">Commit / Done</div><div class="mc-value">{f"{cd_val}%" if cd_val else "—"}</div><div class="mc-sub">dokončeno z commitnutého</div></div>""", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
 # 3. BURNDOWN
