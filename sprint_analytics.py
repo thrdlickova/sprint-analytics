@@ -1193,13 +1193,24 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
-    # label_visibility="collapsed" ale ikonový text "keyboard_double_end_large" a "add"
-    # jsou schovány přes CSS výše
     uploaded = st.file_uploader(
-        "Nahraj export",
+        "Nahraj export z Jiry (CSV / JSON)",
         type=["csv","json"],
-        label_visibility="collapsed",
+        label_visibility="visible",
     )
+    # JS: skryje "add" ikonový text který Streamlit renderuje mimo dosah CSS
+    st.markdown("""<script>
+    (function hide_add(){
+      const si=document.querySelector('[data-testid="stSidebar"]');
+      if(!si){setTimeout(hide_add,300);return;}
+      si.querySelectorAll('span').forEach(s=>{
+        if(s.children.length===0&&s.textContent.trim()==='add'){
+          s.style.display='none';
+        }
+      });
+      setTimeout(hide_add,1000);
+    })();
+    </script>""", unsafe_allow_html=True)
 
     st.markdown("""
     <div style="margin-top:.6rem;">
