@@ -97,43 +97,61 @@ h1,h2,h3{
 h1{font-size:1.9rem!important}
 p,li,span,label{color:#5c5449!important}
 
-/* ── Potlač VŠECHNY ikonové artefakty v sidebaru ──
-   Streamlit renderuje Material icons jako text (keyboard_double_end_large, add, atd.)
-   a jsou viditelné při label_visibility="collapsed"                              */
-[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] ~ div,
-[data-testid="stSidebar"] [data-testid="baseButton-minimal"],
-[data-testid="stSidebar"] button[data-testid="stFileUploaderDeleteBtn"],
-[data-testid="stSidebar"] .stFileUploaderFile,
+/* ── Potlač VŠECHNY ikonové artefakty Streamlitu ──
+   Material icons renderují jako text: "keyboard_double_end_large", "add", atd.
+   Řešení: font-size:0 + color:transparent na všechny spany v file uploaderu    */
 
-/* Ikonový text */
-[data-testid="stSidebar"] span.material-symbols-rounded,
-[data-testid="stSidebar"] span[aria-hidden="true"]:empty,
-
-/* Obecně: skryj labely widgetů v sidebaru */
-[data-testid="stSidebar"] [data-testid="stWidgetLabel"],
-[data-testid="stSidebar"] [data-testid="stWidgetLabel"] *,
+/* Skryj celý label widgetu */
+[data-testid="stWidgetLabel"],
+[data-testid="stWidgetLabel"] *,
 [data-testid="stFileUploader"] label,
-[data-testid="stFileUploader"] label *,
-section[data-testid="stFileUploader"] > label,
+[data-testid="stFileUploader"] > label,
+section[data-testid="stFileUploader"] > label { display:none!important; }
 
-/* "keyboard_do…" a "add" jsou span děti těchto buttonů */
-[data-testid="stSidebar"] [data-baseweb="button"] > span:first-child,
-[data-testid="stSidebar"] button > span.css-fblp2m,
-[data-testid="stSidebar"] [data-testid="stFileUploaderDeleteBtn"] span{
-  display:none!important;visibility:hidden!important;
-  width:0!important;height:0!important;overflow:hidden!important;
+/* "add" = ikonový text v delete buttonu po uploadu — font-size trick */
+[data-testid="stFileUploaderDeleteBtn"],
+[data-testid="stFileUploaderDeleteBtn"] *,
+[data-testid="stFileUploaderDeleteBtn"] span {
+  font-size:0!important;
+  color:transparent!important;
+  width:0!important;height:0!important;
+  overflow:hidden!important;display:none!important;
 }
+
+/* "uploadUpload" = icon název "upload" + label "Upload" — skryj jen ikonu */
+[data-testid="stFileUploaderDropzone"] [data-testid="stIconMaterial"] {
+  display:none!important;
+}
+
+/* Obecně: všechny material icon spany kdekoliv */
+span.material-symbols-rounded,
+[data-testid="stSidebar"] span.material-symbols-rounded,
+[data-testid="stSidebar"] [data-baseweb="button"] span:not([class*="css-"]),
+button[data-testid="baseButton-minimal"] span:empty,
+button[data-testid="baseButton-minimal"] > div > span { font-size:0!important; }
 
 /* File uploader stylování */
 [data-testid="stFileUploader"]{
   background:#fffef9!important;border:2px dashed #d4cfc6!important;
   border-radius:14px!important;margin-top:.4rem!important;
 }
-[data-testid="stFileUploaderDropzone"]{padding:.6rem!important;background:#fffef9!important}
-[data-testid="stFileUploaderDropzoneInstructions"] p{font-size:.78rem!important;color:#8a8375!important}
+[data-testid="stFileUploaderDropzone"]{
+  padding:.8rem .6rem!important;background:#fffef9!important;
+  align-items:center!important;text-align:center!important;
+}
+/* Upload tlačítko — centrované, auto šířka */
 [data-testid="stFileUploaderDropzone"] button{
   background:#f2ede6!important;border:1px solid #d4cfc6!important;
   color:#5c5449!important;border-radius:8px!important;font-size:.8rem!important;
+  width:auto!important;min-width:110px!important;
+}
+/* "200MB per file • CSV, JSON" — menší, méně výrazné */
+[data-testid="stFileUploaderDropzoneInstructions"] p{
+  font-size:.72rem!important;color:#c5bfb6!important;text-align:center!important;
+}
+[data-testid="stFileUploaderDropzoneInstructions"] span,
+[data-testid="stFileUploaderDropzoneInstructions"] small{
+  font-size:.72rem!important;color:#c5bfb6!important;
 }
 
 /* ── Sidebar nav ── */
@@ -1194,23 +1212,10 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
     uploaded = st.file_uploader(
-        "Nahraj export z Jiry (CSV / JSON)",
+        "Nahraj export",
         type=["csv","json"],
-        label_visibility="visible",
+        label_visibility="collapsed",
     )
-    # JS: skryje "add" ikonový text který Streamlit renderuje mimo dosah CSS
-    st.markdown("""<script>
-    (function hide_add(){
-      const si=document.querySelector('[data-testid="stSidebar"]');
-      if(!si){setTimeout(hide_add,300);return;}
-      si.querySelectorAll('span').forEach(s=>{
-        if(s.children.length===0&&s.textContent.trim()==='add'){
-          s.style.display='none';
-        }
-      });
-      setTimeout(hide_add,1000);
-    })();
-    </script>""", unsafe_allow_html=True)
 
     st.markdown("""
     <div style="margin-top:.6rem;">
