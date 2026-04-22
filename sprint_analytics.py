@@ -130,6 +130,14 @@ section[data-testid="stFileUploader"] > label { display:none!important; }
 /* ── Sidebar nav ── */
 [data-testid="stSidebar"] a{text-decoration:none!important}
 [data-testid="stSidebar"] a:hover{color:#6366f1!important}
+/* Sidebar: skryj upload box a header, nech jen Navigace */
+[data-testid="stSidebar"] [data-testid="stFileUploader"] { display:none!important; }
+[data-testid="stSidebarHeader"] { display:none!important; }
+[data-testid="stSidebarContent"] { padding-top:0!important; }
+/* Sidebar: plná čára místo dashed */
+[data-testid="stSidebar"] [data-testid="stFileUploader"] {
+  border:none!important; border-top:1.5px solid #e8e3d8!important;
+}
 
 /* ── Alerts & expanders ── */
 div[data-testid="stAlert"]{
@@ -218,18 +226,20 @@ div[data-testid="stAlert"]{
 
 /* ── Tabulka ── */
 .dt{
-  width:100%;border-collapse:collapse;font-size:13px;
-  font-family:'DM Sans',sans-serif;border-radius:13px;overflow:hidden;
+  width:100%;border-collapse:separate;border-spacing:0;font-size:13px;
+  font-family:'DM Sans',sans-serif;border-radius:14px;overflow:hidden;
   border:1.5px solid #e8e3d8;background:#fffef9;
+  box-shadow:2px 3px 0px 0px #e0dbd2;
 }
-.dt thead tr{background:#f2ede6}
+.dt thead tr{background:#fffef9}
 .dt th{
-  padding:9px 13px;text-align:left;
-  font-size:.64rem;font-weight:500;letter-spacing:.08em;text-transform:uppercase;
-  color:#a39e96;font-family:'DM Mono',monospace;border-bottom:1.5px solid #e8e3d8;
+  padding:10px 14px;text-align:left;
+  font-size:.95rem;font-weight:400;
+  font-family:'DM Serif Display',serif;color:#2c2922;
+  border-bottom:1.5px solid #e8e3d8;
 }
 .dt td{
-  padding:8px 13px;color:#3d382f;background:#fffef9;
+  padding:9px 14px;color:#3d382f;background:#fffef9;
   border-bottom:1px solid #f0ebe2;vertical-align:middle;
 }
 .dt tbody tr:hover td{background:#f7f3ec}
@@ -238,8 +248,8 @@ div[data-testid="stAlert"]{
 .dt .s-done{color:#16a34a;font-weight:500}
 .dt .s-active{color:#6366f1;font-weight:500}
 .dt .s-todo{color:#a39e96}
-.dt .row-spill td{background:#fff8f0!important}
-.dt .row-spill td:first-child{border-left:3px solid #fdba74;padding-left:10px}
+.dt .row-spill td{background:#fffef9!important}
+.dt .row-spill td:first-child{border-left:none;padding-left:14px}
 .dt .row-avg td{background:#f7f3ec!important;font-weight:600;border-top:1px solid #e8e3d8}
 
 /* ── Info boxy ── */
@@ -649,9 +659,12 @@ def draw_burndown(issues_df, mapping, sprint_start, sprint_end):
     ax.set_ylabel("Story points", color="#a39e96", fontsize=9)
     ax.set_xlim(sprint_start, sprint_end)
     ax.set_ylim(0, total_sp * 1.12)
-    plt.xticks(rotation=35, ha="right", color="#a39e96", fontsize=8.5)
+    ax.tick_params(colors="#5c5449", labelsize=9.5, length=3, width=0.8)
+    plt.xticks(rotation=35, ha="right", color="#5c5449", fontsize=9.5, fontweight='medium')
+    plt.yticks(color="#5c5449", fontsize=9.5, fontweight='medium')
+    ax.set_ylabel("Story points", color="#5c5449", fontsize=10)
     ax.legend(loc="upper right", frameon=True, facecolor="#fffef9",
-              edgecolor="#e8e3d8", labelcolor="#5c5449", fontsize=9, framealpha=0.95)
+              edgecolor="#e8e3d8", labelcolor="#5c5449", fontsize=9.5, framealpha=0.95)
     plt.tight_layout(pad=0.6)
 
     final_pct = round(actual[-1] / total_sp * 100) if total_sp > 0 else 0
@@ -678,13 +691,14 @@ def draw_time_by_type(df, mapping):
     if by_type.empty:
         return None
 
-    pie_colors  = [TYPE_COLORS.get(t,  PASTEL["slate"]) for t in by_type[type_col]]
-    pie_hatches = [TYPE_HATCHES.get(t, "////")           for t in by_type[type_col]]
-    total_h     = by_type["_total_h"].sum()
+    # Teplá pastelová paleta bez šrafování
+    WARM_PIE = {"Story": "#c07860", "Bug": "#e8c4b0", "Bug Subtask": "#d4a898"}
+    pie_colors = [WARM_PIE.get(t, "#d4cfc6") for t in by_type[type_col]]
+    total_h    = by_type["_total_h"].sum()
 
-    fig, ax = plt.subplots(figsize=(5.5, 4.4))
-    fig.patch.set_facecolor("#fafaf8")
-    ax.set_facecolor("#fafaf8")
+    fig, ax = plt.subplots(figsize=(5.5, 4.4), dpi=180)
+    fig.patch.set_facecolor("#fffef9")
+    ax.set_facecolor("#fffef9")
 
     wedges, _, autotexts = ax.pie(
         by_type["_total_h"],
@@ -692,18 +706,13 @@ def draw_time_by_type(df, mapping):
         colors=pie_colors,
         autopct=lambda p: f"{p:.0f}%",
         startangle=90,
-        pctdistance=0.68,
-        wedgeprops={"edgecolor": "#fafaf8", "linewidth": 3.0},
+        pctdistance=0.72,
+        wedgeprops={"edgecolor": "#fffef9", "linewidth": 2.5},
     )
-    # Šrafování: bílé čáry na pastelové ploše (styl z obrazku)
-    for w, h in zip(wedges, pie_hatches):
-        w.set_hatch(h)
-        w.set_edgecolor("#ffffff")
-
     for at in autotexts:
         at.set_fontsize(11)
-        at.set_fontweight("600")
-        at.set_color("#2c2922")
+        at.set_fontweight("bold")
+        at.set_color("#fffef9")
 
     # Střed
     ax.text(0,  0.08, f"{total_h:.0f}h", ha="center", va="center",
@@ -742,24 +751,22 @@ def draw_unplanned_work(df, mapping):
         return None
 
     total = planned_h + unplanned_h
-    fig, ax = plt.subplots(figsize=(8, 2.1))
-    fig.patch.set_facecolor("#fafaf8")
-    ax.set_facecolor("#fafaf8")
+    fig, ax = plt.subplots(figsize=(8, 2.1), dpi=180)
+    fig.patch.set_facecolor("#fffef9")
+    ax.set_facecolor("#fffef9")
 
-    # Šrafované sloupce — bílé čáry na pastelové ploše
-    ax.barh([""], [planned_h], color=PASTEL["blue"], height=0.5,
-            hatch="////", edgecolor="#ffffff", linewidth=0.0,
+    # Teplá paleta bez šrafování
+    ax.barh([""], [planned_h], color="#c07860", height=0.5, edgecolor="none",
             label=f"Plánovaná ({planned_h:.0f} h)")
-    ax.barh([""], [unplanned_h], left=planned_h, color=PASTEL["red"], height=0.5,
-            hatch="xxxx", edgecolor="#ffffff", linewidth=0.0,
+    ax.barh([""], [unplanned_h], left=planned_h, color="#e8c4b0", height=0.5, edgecolor="none",
             label=f"Bugy — plánované ({unplanned_h:.0f} h)")
 
     ax.text(planned_h / 2, 0,
             f"{planned_h:.0f} h\n{round(planned_h/total*100)}%",
-            ha="center", va="center", fontsize=9, color="#2c2922", fontweight="600")
+            ha="center", va="center", fontsize=9, color="#fffef9", fontweight="bold")
     ax.text(planned_h + unplanned_h / 2, 0,
             f"{unplanned_h:.0f} h\n{round(unplanned_h/total*100)}%",
-            ha="center", va="center", fontsize=9, color="#2c2922", fontweight="600")
+            ha="center", va="center", fontsize=9, color="#5c5449", fontweight="bold")
 
     for sp in ax.spines.values():
         sp.set_visible(False)
@@ -870,43 +877,73 @@ def draw_estimation_by_sp(df, mapping):
 
 
 # ─────────────────────────────────────────────
-# FLOW EFFICIENCY BAR (HTML)
+# PRŮMĚRNÝ ČAS VE STAVU — karty
 # ─────────────────────────────────────────────
 
-def draw_flow_efficiency(df, mapping):
-    tc = {
-        "Aktivní":   (mapping.get("time_progress"), PASTEL["blue"]),
-        "Review":    (mapping.get("time_review"),   PASTEL["purple"]),
-        "Testing":   (mapping.get("time_testing"),  PASTEL["teal"]),
-        "Čekání":    (mapping.get("time_todo"),     PASTEL["slate"]),
-        "Blokováno": (mapping.get("time_blocked"),  PASTEL["red"]),
-    }
-    totals = {}
-    for label, (col, color) in tc.items():
+def draw_flow_state_cards(df, mapping):
+    """Matplotlib karty: průměrný počet dní v každém stavu."""
+    id_col = mapping.get("id", df.columns[0])
+    states = [
+        ("In Progress", mapping.get("time_progress"), "#c07860"),
+        ("In Review",   mapping.get("time_review"),   "#d4a898"),
+        ("Testing",     mapping.get("time_testing"),  "#b8d4b0"),
+        ("Čekání",      mapping.get("time_todo"),     "#e8e3d8"),
+        ("Blokováno",   mapping.get("time_blocked"),  "#f5c4b0"),
+    ]
+    # Průměrné hodiny → dny (8h = 1 den)
+    uniq = df.groupby(id_col).first().reset_index()
+    avgs = []
+    for label, col, color in states:
         if col and col in df.columns:
-            v = pd.to_numeric(df[col], errors="coerce").fillna(0).sum()
-            if v > 0:
-                totals[label] = (v, color)
-    if not totals:
-        return None, None, None
-    grand  = sum(v for v, _ in totals.values())
-    if grand == 0:
-        return None, None, None
-    active = sum(totals.get(k, (0, ""))[0] for k in ["Aktivní","Review","Testing"])
-    fe     = round(active / grand * 100, 1)
+            avg_h = pd.to_numeric(uniq[col], errors="coerce").fillna(0).mean()
+            avg_d = round(avg_h / 8, 1)
+            avgs.append((label, avg_d, color))
+        else:
+            avgs.append((label, None, color))
 
-    bars   = "".join(
-        f"<div style='width:{round(v/grand*100,1)}%;height:10px;border-radius:3px;"
-        f"background:{c};flex-shrink:0;'></div>"
-        for _, (v, c) in totals.items()
+    if all(v is None for _, v, _ in avgs):
+        return None
+
+    # Flow efficiency pro info
+    active_h = sum(
+        pd.to_numeric(uniq[mapping.get(k)], errors="coerce").fillna(0).mean()
+        for k in ["time_progress","time_review","time_testing"]
+        if mapping.get(k) and mapping.get(k) in df.columns
     )
-    legend = "".join(
-        f"<div class='flow-leg-item'>"
-        f"<div class='flow-dot' style='background:{c};'></div>"
-        f"{lbl} {round(v/grand*100,0):.0f}%</div>"
-        for lbl, (v, c) in totals.items()
+    total_h = sum(
+        pd.to_numeric(uniq[mapping.get(k)], errors="coerce").fillna(0).mean()
+        for k in ["time_progress","time_review","time_testing","time_todo","time_blocked"]
+        if mapping.get(k) and mapping.get(k) in df.columns
     )
-    return bars, legend, fe
+    fe = round(active_h / total_h * 100, 1) if total_h > 0 else None
+
+    fig, axes = plt.subplots(1, 5, figsize=(13, 2.8), dpi=180)
+    fig.patch.set_facecolor("#f7f4ef")
+
+    for ax, (label, days, color) in zip(axes, avgs):
+        ax.set_facecolor("#fffef9")
+        for spine in ax.spines.values():
+            spine.set_edgecolor("#e8e3d8")
+            spine.set_linewidth(1.5)
+        ax.set_xticks([]); ax.set_yticks([])
+        ax.set_xlim(0, 1); ax.set_ylim(0, 1)
+
+        ax.text(0.5, 0.82, label, ha="center", va="center",
+                fontsize=10, color="#5c5449", fontfamily="monospace",
+                transform=ax.transAxes)
+        val_str = f"{days}" if days is not None else "—"
+        ax.text(0.5, 0.48, val_str, ha="center", va="center",
+                fontsize=28, color="#2c2922",
+                fontfamily="DejaVu Serif", transform=ax.transAxes)
+        ax.text(0.5, 0.15, "dní průměrně", ha="center", va="center",
+                fontsize=7.5, color="#a39e96", transform=ax.transAxes)
+
+        rect = plt.Rectangle((0, 0), 1, 0.06, color=color,
+                              transform=ax.transAxes, clip_on=False)
+        ax.add_patch(rect)
+
+    plt.tight_layout(pad=0.5)
+    return fig, fe
 
 
 # ─────────────────────────────────────────────
@@ -1536,7 +1573,7 @@ else:
 
 if metrics.get("spillover_count", 0) > 0:
     st.markdown('<div id="spillover"></div>', unsafe_allow_html=True)
-    section("⚠️", f"Nedokončené issues — {metrics['spillover_count']} přešlo do dalšího sprintu")
+    section("⚠️", f"Nedokončené issues — {metrics['spillover_count']} {'přešla' if metrics['spillover_count'] == 1 else 'přešly' if 2 <= metrics['spillover_count'] <= 4 else 'přešlo'} do dalšího sprintu")
 
     id_col     = mapping.get("id", df.columns[0])
     type_col   = mapping.get("type")
@@ -1599,34 +1636,25 @@ if fig_unpl:
     st.pyplot(fig_unpl, use_container_width=True)
     plt.close(fig_unpl)
 
-bars_fl, legend_fl, fe_num = draw_flow_efficiency(df, mapping)
-if bars_fl:
-    fe_color = "#b91c1c" if fe_num < 50 else ("#b45309" if fe_num < 65 else "#16a34a")
-    fe_interpret = ("Nízká — issues tráví více času čekáním než aktivní prací" if fe_num < 50
-                    else ("Dobrá — issues většinou aktivně postupují" if fe_num < 65
-                          else "Výborná — issues tráví minimum času čekáním"))
-    st.markdown(f"""
-    <div class="flow-wrap" style="margin-top:1.3rem;">
-      <div style="display:flex;align-items:baseline;gap:.6rem;margin-bottom:.65rem;flex-wrap:wrap;">
-        <div style="font-size:.65rem;font-family:'DM Mono',monospace;color:#a39e96;
-                    text-transform:uppercase;letter-spacing:.08em;">
-          Jak issues trávily čas v procesu
-        </div>
-        <div style="font-size:.84rem;font-weight:600;color:{fe_color};">
-          Flow Efficiency: {fe_num}%
-        </div>
-        <div style="font-size:.78rem;color:#a39e96;">— {fe_interpret}</div>
-      </div>
-      <div style="display:flex;height:10px;border-radius:99px;overflow:hidden;gap:3px;">
-        {bars_fl}
-      </div>
-      <div class="flow-leg" style="margin-top:.55rem;">{legend_fl}</div>
-      <div style="font-size:.73rem;color:#a39e96;margin-top:.65rem;
-                  font-family:'DM Mono',monospace;">
-        Aktivní práce = In Progress + Review + Testing &nbsp;·&nbsp; Cílové pásmo: 40–65%
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
+result_flow = draw_flow_state_cards(df, mapping)
+if result_flow:
+    fig_flow, fe_num = result_flow
+    fe_color = "#b91c1c" if fe_num and fe_num < 50 else ("#b45309" if fe_num and fe_num < 65 else "#4a8040")
+    fe_badge = (f" &nbsp;·&nbsp; <span style='color:{fe_color};font-weight:600;'>"
+                f"Flow Efficiency: {fe_num}%</span>") if fe_num else ""
+    st.markdown(
+        f"<div style='font-size:.65rem;color:#a39e96;margin-top:1.3rem;margin-bottom:.4rem;"
+        f"font-family:DM Mono,monospace;text-transform:uppercase;letter-spacing:.08em;'>"
+        f"Jak issues trávily čas v procesu{fe_badge}</div>",
+        unsafe_allow_html=True)
+    st.pyplot(fig_flow, use_container_width=True)
+    plt.close(fig_flow)
+    st.markdown(
+        "<div style='font-size:.72rem;color:#a39e96;margin-top:.3rem;"
+        "font-family:DM Mono,monospace;'>"
+        "Aktivní práce = In Progress + Review + Testing &nbsp;·&nbsp; Cílové pásmo: 40–65%"
+        "</div>",
+        unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────
