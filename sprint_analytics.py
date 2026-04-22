@@ -97,80 +97,33 @@ h1,h2,h3{
 h1{font-size:1.9rem!important}
 p,li,span,label{color:#5c5449!important}
 
-/* ── Potlač VŠECHNY ikonové artefakty Streamlitu ──
-   Material icons renderují jako text: "keyboard_double_end_large", "add", atd.
-   Řešení: font-size:0 + color:transparent na všechny spany v file uploaderu    */
+/* ── File uploader — minimální bezpečné styly ──
+   Neruší Streamlitovo nativní renderování tlačítek                              */
 
-/* Skryj celý label widgetu */
-[data-testid="stWidgetLabel"],
-[data-testid="stWidgetLabel"] *,
-[data-testid="stFileUploader"] label,
-[data-testid="stFileUploader"] > label,
+/* Skryj label widgetu */
+[data-testid="stWidgetLabel"] { display:none!important; }
 section[data-testid="stFileUploader"] > label { display:none!important; }
 
-/* "add" = ikonový text v delete buttonu po uploadu — font-size trick */
-[data-testid="stFileUploaderDeleteBtn"],
-[data-testid="stFileUploaderDeleteBtn"] *,
-[data-testid="stFileUploaderDeleteBtn"] span {
-  font-size:0!important;
-  color:transparent!important;
-  width:0!important;height:0!important;
-  overflow:hidden!important;display:none!important;
+/* Skryj "keyboard_double_arrow_left" v collapse buttonu sidebaru */
+[data-testid="stBaseButton-headerNoPadding"] [data-testid="stIconMaterial"] {
+  font-size:0!important;color:transparent!important;overflow:hidden!important;
 }
 
-/* "uploadUpload" = icon název "upload" + label "Upload" — skryj jen ikonu */
-[data-testid="stFileUploaderDropzone"] [data-testid="stIconMaterial"] {
+/* Po uploadu: skryj zmenšenou drop zónu — jen když je file chip přítomen */
+[data-testid="stFileUploader"]:has([data-testid="stFileChip"]) [data-testid="stFileUploaderDropzone"] {
   display:none!important;
 }
 
-/* Obecně: všechny material icon spany kdekoliv */
-span.material-symbols-rounded,
-[data-testid="stSidebar"] span.material-symbols-rounded,
-[data-testid="stSidebar"] [data-baseweb="button"] span:not([class*="css-"]),
-button[data-testid="baseButton-minimal"] span:empty,
-button[data-testid="baseButton-minimal"] > div > span { font-size:0!important; }
-
-/* Skryj "keyboard_double_arrow_left" v collapse buttonu sidebaru */
-[data-testid="stBaseButton-headerNoPadding"] [data-testid="stIconMaterial"],
-[data-testid="stBaseButton-headerNoPadding"] span[translate="no"] {
-  font-size:0!important;color:transparent!important;
-  width:0!important;overflow:hidden!important;
-}
-
-/* Skryj prázdný "add another file" button — stFileChip obsahuje X + prázdný button */
-[data-testid="stFileChip"] [data-testid="stBaseButton-minimal"] { display:none!important; }
-/* Fallback: sidebar secondary button */
-[data-testid="stFileUploader"] [data-testid="stBaseButton-secondary"] { display:none!important; }
-[data-testid="stFileUploaderDropzone"] ~ div { display:none!important; }
-
-/* File uploader stylování — sidebar i main */
+/* File uploader box — styl ohraničení */
 [data-testid="stFileUploader"]{
   background:#fffef9!important;border:2px dashed #d4cfc6!important;
   border-radius:14px!important;margin-top:.4rem!important;
-  overflow:visible!important;
 }
 [data-testid="stFileUploaderDropzone"]{
-  padding:1rem .8rem!important;background:#fffef9!important;
-  align-items:center!important;text-align:center!important;
-  display:flex!important;flex-direction:column!important;
-  justify-content:center!important;gap:.5rem!important;
+  background:#fffef9!important;
 }
-/* Upload tlačítko — centrované, auto šířka */
-[data-testid="stFileUploaderDropzone"] button{
-  background:#f2ede6!important;border:1px solid #d4cfc6!important;
-  color:#5c5449!important;border-radius:8px!important;font-size:.85rem!important;
-  width:auto!important;min-width:120px!important;margin:0 auto!important;display:block!important;
-}
-/* 200MB text — centrovaný */
-[data-testid="stFileUploaderDropzoneInstructions"]{
-  text-align:center!important;width:100%!important;
-}
-/* "200MB per file • CSV, JSON" — menší, méně výrazné */
-[data-testid="stFileUploaderDropzoneInstructions"] p{
-  font-size:.72rem!important;color:#c5bfb6!important;text-align:center!important;
-}
-[data-testid="stFileUploaderDropzoneInstructions"] span,
-[data-testid="stFileUploaderDropzoneInstructions"] small{
+/* 200MB text — méně výrazný */
+[data-testid="stFileUploaderDropzoneInstructions"] span {
   font-size:.72rem!important;color:#c5bfb6!important;
 }
 
@@ -1292,7 +1245,88 @@ with st.sidebar:
 uploaded = st.session_state.get("uploaded_file", None)
 
 # ─────────────────────────────────────────────
-# HEADER
+# PRÁZDNÝ STAV — centrovaná landing page
+# ─────────────────────────────────────────────
+
+if not uploaded:
+    # Skryj sidebar na landing page
+    st.markdown("""
+    <style>
+    [data-testid="stSidebar"],[data-testid="stSidebarCollapsedControl"]{display:none!important;}
+    section[data-testid="stAppViewContainer"] > div:first-child{margin-left:0!important;}
+    /* Upload box — správné rohy přes wrapper */
+    .__upload_wrapper{
+      max-width:320px;margin:0 auto;
+      border:2px dashed #d4cfc6;border-radius:12px;overflow:hidden;
+      background:#fffef9;
+    }
+    .__upload_wrapper [data-testid="stFileUploader"]{
+      border:none!important;background:#fffef9!important;
+      border-radius:0!important;margin:0!important;
+    }
+    .__upload_wrapper [data-testid="stFileUploaderDropzone"]{
+      background:#fffef9!important;padding:.6rem!important;
+      display:flex!important;flex-direction:column!important;
+      align-items:center!important;justify-content:center!important;
+      gap:6px!important;text-align:center!important;
+    }
+    .__upload_wrapper [data-testid="stFileUploaderDropzoneInstructions"] span{
+      font-size:.72rem!important;color:#c5bfb6!important;
+      text-align:center!important;display:block!important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # Centrovaný nadpis
+    st.markdown("""
+    <div style="text-align:center;margin-bottom:1rem;padding-bottom:1rem;
+                border-bottom:1.5px solid #e8e3d8;">
+      <div style="font-size:.65rem;font-family:'DM Mono',monospace;color:#a39e96;
+                  letter-spacing:.1em;text-transform:uppercase;margin-bottom:.3rem;">
+        Alza.cz · Mobilní aplikace
+      </div>
+      <h1 style="font-size:2rem;font-weight:400;color:#2c2922;margin:0;
+                 font-family:'DM Serif Display',serif;letter-spacing:-.02em;
+                 text-align:center;">
+        Sprint Analytics
+      </h1>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Centrovaný obsah
+    st.markdown("""
+    <div style="text-align:center;margin-top:2.5rem;margin-bottom:.8rem;">
+      <div style="font-size:2.5rem;margin-bottom:.6rem;">📂</div>
+      <div style="font-size:1.15rem;font-weight:400;color:#2c2922;margin-bottom:.3rem;
+                  font-family:'DM Serif Display',serif;">
+        Nahraj export z Jiry
+      </div>
+      <div style="font-size:.83rem;color:#a39e96;margin-bottom:1.2rem;">
+        Přetáhni soubor nebo klikni na tlačítko · CSV nebo JSON
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Upload box centrovaný — wrapper div v Pythonu přes st.markdown + columns
+    col_l, col_c, col_r = st.columns([1, 1, 1])
+    with col_c:
+        st.markdown('<div class="__upload_wrapper">', unsafe_allow_html=True)
+        uploaded_main = st.file_uploader(
+            "Nahraj CSV nebo JSON",
+            type=["csv", "json"],
+            label_visibility="collapsed",
+            key="main_uploader",
+        )
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    if uploaded_main is not None:
+        st.session_state["uploaded_file"] = uploaded_main
+        st.rerun()
+    else:
+        st.stop()
+
+# ─────────────────────────────────────────────
+# HEADER — zobrazí se jen když je soubor nahrán
 # ─────────────────────────────────────────────
 
 st.markdown("""
@@ -1314,34 +1348,6 @@ st.markdown("""
   </div>
 </div>
 """, unsafe_allow_html=True)
-
-# ── Prázdný stav — uploader v hlavní ploše + session state ──
-if not uploaded:
-    st.markdown("""
-    <div style="margin-top:2rem;margin-bottom:.5rem;text-align:center;">
-      <div style="font-size:2.5rem;margin-bottom:.6rem;">📂</div>
-      <div style="font-size:1.15rem;font-weight:400;color:#2c2922;margin-bottom:.3rem;
-                  font-family:'DM Serif Display',serif;">
-        Nahraj export z Jiry
-      </div>
-      <div style="font-size:.83rem;color:#a39e96;margin-bottom:1rem;">
-        Přetáhni soubor nebo klikni na tlačítko · CSV nebo JSON
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
-    col_l, col_c, col_r = st.columns([1, 2, 1])
-    with col_c:
-        uploaded_main = st.file_uploader(
-            "Nahraj CSV nebo JSON",
-            type=["csv", "json"],
-            label_visibility="collapsed",
-            key="main_uploader",
-        )
-    if uploaded_main is not None:
-        st.session_state["uploaded_file"] = uploaded_main
-        st.rerun()
-    else:
-        st.stop()
 
 # ── Načtení dat ──
 df, err = load_file(uploaded)
