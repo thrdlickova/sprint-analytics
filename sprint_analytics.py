@@ -140,20 +140,22 @@ button[data-testid="baseButton-minimal"] > div > span { font-size:0!important; }
 /* Skryj prázdný "add another file" button po uploadu */
 [data-testid="stFileUploaderDropzone"] ~ div { display:none!important; }
 
-/* File uploader stylování */
+/* File uploader stylování — sidebar i main */
 [data-testid="stFileUploader"]{
   background:#fffef9!important;border:2px dashed #d4cfc6!important;
   border-radius:14px!important;margin-top:.4rem!important;
+  overflow:visible!important;
 }
 [data-testid="stFileUploaderDropzone"]{
-  padding:.8rem .6rem!important;background:#fffef9!important;
+  padding:1rem .8rem!important;background:#fffef9!important;
   align-items:center!important;text-align:center!important;
+  flex-direction:column!important;gap:.5rem!important;
 }
 /* Upload tlačítko — centrované, auto šířka */
 [data-testid="stFileUploaderDropzone"] button{
   background:#f2ede6!important;border:1px solid #d4cfc6!important;
-  color:#5c5449!important;border-radius:8px!important;font-size:.8rem!important;
-  width:auto!important;min-width:110px!important;
+  color:#5c5449!important;border-radius:8px!important;font-size:.85rem!important;
+  width:auto!important;min-width:120px!important;margin:0 auto!important;
 }
 /* "200MB per file • CSV, JSON" — menší, méně výrazné */
 [data-testid="stFileUploaderDropzoneInstructions"] p{
@@ -1295,22 +1297,31 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# ── Prázdný stav ──
+# ── Prázdný stav — skutečný uploader v hlavní ploše ──
 if not uploaded:
     st.markdown("""
-    <div style="background:#fffef9;border:2px dashed #d4cfc6;border-radius:16px;
-                padding:3.5rem;text-align:center;margin-top:2rem;">
-      <div style="font-size:2.2rem;margin-bottom:1rem;">📂</div>
-      <div style="font-size:1.1rem;font-weight:400;color:#2c2922;margin-bottom:.5rem;
+    <div style="margin-top:2rem;margin-bottom:.5rem;text-align:center;">
+      <div style="font-size:2.5rem;margin-bottom:.6rem;">📂</div>
+      <div style="font-size:1.15rem;font-weight:400;color:#2c2922;margin-bottom:.3rem;
                   font-family:'DM Serif Display',serif;">
         Nahraj export z Jiry
       </div>
-      <div style="font-size:.83rem;color:#a39e96;">
-        CSV nebo JSON · Použij testovaci_sprint_192.csv pro demo
+      <div style="font-size:.83rem;color:#a39e96;margin-bottom:1rem;">
+        Přetáhni soubor nebo klikni na tlačítko · CSV nebo JSON
       </div>
     </div>
     """, unsafe_allow_html=True)
-    st.stop()
+    col_l, col_c, col_r = st.columns([1, 2, 1])
+    with col_c:
+        uploaded_main = st.file_uploader(
+            "Nahraj CSV nebo JSON",
+            type=["csv", "json"],
+            label_visibility="collapsed",
+        )
+    if uploaded_main is not None:
+        uploaded = uploaded_main
+    else:
+        st.stop()
 
 # ── Načtení dat ──
 df, err = load_file(uploaded)
