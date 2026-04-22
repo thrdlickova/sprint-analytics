@@ -1254,25 +1254,27 @@ if not uploaded:
     <style>
     [data-testid="stSidebar"],[data-testid="stSidebarCollapsedControl"]{display:none!important;}
     section[data-testid="stAppViewContainer"] > div:first-child{margin-left:0!important;}
-    /* Upload box — správné rohy přes wrapper */
-    .__upload_wrapper{
-      max-width:320px;margin:0 auto;
-      border:2px dashed #d4cfc6;border-radius:12px;overflow:hidden;
-      background:#fffef9;
+    /* Upload box — dashed border s dobrými rohy, centrovaný */
+    [data-testid="stFileUploader"]{
+      max-width:320px!important;margin:0 auto!important;
+      border:2px dashed #d4cfc6!important;border-radius:12px!important;
+      background:#fffef9!important;overflow:visible!important;
+      padding:2px!important;
     }
-    .__upload_wrapper [data-testid="stFileUploader"]{
-      border:none!important;background:#fffef9!important;
-      border-radius:0!important;margin:0!important;
-    }
-    .__upload_wrapper [data-testid="stFileUploaderDropzone"]{
-      background:#fffef9!important;padding:.6rem!important;
+    [data-testid="stFileUploaderDropzone"]{
+      border:none!important;background:transparent!important;
+      border-radius:10px!important;
       display:flex!important;flex-direction:column!important;
       align-items:center!important;justify-content:center!important;
-      gap:6px!important;text-align:center!important;
+      text-align:center!important;gap:6px!important;
+      padding:.8rem!important;
     }
-    .__upload_wrapper [data-testid="stFileUploaderDropzoneInstructions"] span{
+    [data-testid="stFileUploaderDropzoneInstructions"]{
+      width:100%!important;text-align:center!important;
+    }
+    [data-testid="stFileUploaderDropzoneInstructions"] span{
       font-size:.72rem!important;color:#c5bfb6!important;
-      text-align:center!important;display:block!important;
+      text-align:center!important;display:block!important;width:100%!important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -1310,14 +1312,12 @@ if not uploaded:
     # Upload box centrovaný — wrapper div v Pythonu přes st.markdown + columns
     col_l, col_c, col_r = st.columns([1, 1, 1])
     with col_c:
-        st.markdown('<div class="__upload_wrapper">', unsafe_allow_html=True)
         uploaded_main = st.file_uploader(
             "Nahraj CSV nebo JSON",
             type=["csv", "json"],
             label_visibility="collapsed",
             key="main_uploader",
         )
-        st.markdown('</div>', unsafe_allow_html=True)
 
     if uploaded_main is not None:
         st.session_state["uploaded_file"] = uploaded_main
