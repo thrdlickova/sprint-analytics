@@ -130,6 +130,16 @@ span.material-symbols-rounded,
 button[data-testid="baseButton-minimal"] span:empty,
 button[data-testid="baseButton-minimal"] > div > span { font-size:0!important; }
 
+/* Skryj "keyboard_double_arrow_left" v collapse buttonu sidebaru */
+[data-testid="stBaseButton-headerNoPadding"] [data-testid="stIconMaterial"],
+[data-testid="stBaseButton-headerNoPadding"] span[translate="no"] {
+  font-size:0!important;color:transparent!important;
+  width:0!important;overflow:hidden!important;
+}
+
+/* Skryj prázdný "add another file" button po uploadu */
+[data-testid="stFileUploaderDropzone"] ~ div { display:none!important; }
+
 /* File uploader stylování */
 [data-testid="stFileUploader"]{
   background:#fffef9!important;border:2px dashed #d4cfc6!important;
