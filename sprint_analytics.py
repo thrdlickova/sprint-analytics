@@ -137,8 +137,13 @@ button[data-testid="baseButton-minimal"] > div > span { font-size:0!important; }
   width:0!important;overflow:hidden!important;
 }
 
-/* Skryj prázdný "add another file" button po uploadu */
+/* Skryj prázdný "add another file" button a jeho wrapper po uploadu */
 [data-testid="stFileUploaderDropzone"] ~ div { display:none!important; }
+[data-testid="stFileUploaderFile"] ~ div { display:none!important; }
+[data-testid="stFileUploader"] [data-testid="stFileUploaderDropzone"] + div { display:none!important; }
+/* Skryj druhé tlačítko v file upload zóně (prázdný button vedle X) */
+[data-testid="stFileUploaderFile"] + button,
+[data-testid="stFileUploaderFile"] ~ button { display:none!important; }
 
 /* File uploader stylování — sidebar i main */
 [data-testid="stFileUploader"]{
@@ -149,13 +154,18 @@ button[data-testid="baseButton-minimal"] > div > span { font-size:0!important; }
 [data-testid="stFileUploaderDropzone"]{
   padding:1rem .8rem!important;background:#fffef9!important;
   align-items:center!important;text-align:center!important;
-  flex-direction:column!important;gap:.5rem!important;
+  display:flex!important;flex-direction:column!important;
+  justify-content:center!important;gap:.5rem!important;
 }
 /* Upload tlačítko — centrované, auto šířka */
 [data-testid="stFileUploaderDropzone"] button{
   background:#f2ede6!important;border:1px solid #d4cfc6!important;
   color:#5c5449!important;border-radius:8px!important;font-size:.85rem!important;
-  width:auto!important;min-width:120px!important;margin:0 auto!important;
+  width:auto!important;min-width:120px!important;margin:0 auto!important;display:block!important;
+}
+/* 200MB text — centrovaný */
+[data-testid="stFileUploaderDropzoneInstructions"]{
+  text-align:center!important;width:100%!important;
 }
 /* "200MB per file • CSV, JSON" — menší, méně výrazné */
 [data-testid="stFileUploaderDropzoneInstructions"] p{
