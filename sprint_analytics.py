@@ -156,6 +156,23 @@ div[data-testid="stAlert"]{
 }
 [data-testid="stMetricDelta"]{ display:none!important; }
 
+/* ── Metriky: tooltip vedle nadpisu na stejném řádku ──  */
+[data-testid="stMetricLabel"] {
+  display:flex!important;flex-direction:row!important;
+  align-items:center!important;gap:4px!important;flex-wrap:nowrap!important;
+}
+[data-testid="stMetricLabel"] > div {
+  display:flex!important;flex-direction:row!important;
+  align-items:center!important;gap:4px!important;
+}
+[data-testid="stMetricLabel"] [data-testid="stTooltipHoverTarget"] {
+  width:14px!important;height:14px!important;
+  min-width:0!important;min-height:0!important;flex-shrink:0!important;
+}
+[data-testid="stMetricLabel"] [data-testid="stTooltipHoverTarget"] svg {
+  width:12px!important;height:12px!important;
+}
+
 /* ── Tabs ── */
 [data-testid="stTabs"] [role="tablist"]{
   border-bottom:1.5px solid #e8e3d8!important;gap:4px!important;
@@ -588,37 +605,30 @@ def draw_burndown(issues_df, mapping, sprint_start, sprint_end):
                 done_sp += sp
         actual.append(max(total_sp - done_sp, 0))
 
-    fig, ax = plt.subplots(figsize=(12, 3.6))
+    fig, ax = plt.subplots(figsize=(12, 3.6), dpi=180)
     chart_setup(ax, fig)
 
     aa = np.array(actual)
     ia = np.array(ideal)
 
-    # ── Šrafované plochy (bez alpha-blur — čistý hatch pattern) ──
-    # Překročení ideálu = červená šrafovaná plocha
-    ax.fill_between(dates, ia, aa, where=aa > ia,
-                    facecolor=PASTEL["red"], alpha=0.25,
-                    hatch="////", edgecolor="#fca5a5",
-                    linewidth=0.0, zorder=1)
-    # Předběhnutí ideálu = zelená šrafovaná plocha
-    ax.fill_between(dates, ia, aa, where=aa <= ia,
-                    facecolor=PASTEL["green"], alpha=0.25,
-                    hatch="////", edgecolor="#86efac",
-                    linewidth=0.0, zorder=1)
+    # ── Plochy bez šrafování — čistý průhledný fill ──
+    # ── Bez výplní — jen čisté linky ──
 
-    # ── Ideální linka — přesná přerušovaná šedá ──
+    # ── Ideální linka — jemné drobné tečkování ──
     ax.plot(dates, ideal,
-            linestyle=(0, (6, 4)), color="#b8b2a8", linewidth=1.7,
+            linestyle=(0, (1, 2)), color="#c0b8a8", linewidth=1.2,
             label="Ideální tempo", zorder=2,
-            solid_capstyle="round", dash_capstyle="round")
+            solid_capstyle="round", dash_capstyle="round",
+            antialiased=True)
 
-    # ── Skutečný průběh — ostrá tučná modrá ──
+    # ── Skutečný průběh — ostrá teplá terra cotta linka ──
     ax.plot(dates, actual,
-            color="#5b9cf6", linewidth=2.6,
-            marker="o", markersize=5.5,
-            markerfacecolor="#fffef9", markeredgecolor="#5b9cf6",
+            color="#c07860", linewidth=2.5,
+            marker="o", markersize=5.0,
+            markerfacecolor="#fffef9", markeredgecolor="#c07860",
             markeredgewidth=2.0, label="Skutečný průběh",
-            zorder=4, solid_capstyle="round", solid_joinstyle="round")
+            zorder=4, solid_capstyle="butt", solid_joinstyle="miter",
+            antialiased=True)
 
     # Anotace posledního dne
     if actual[-1] > 0:
@@ -1178,13 +1188,13 @@ if "uploaded_file" not in st.session_state:
 
 with st.sidebar:
     st.markdown("""
-    <div style="padding:.6rem 0 1.2rem;">
+    <div style="padding:.6rem 0 1.2rem;text-align:center;">
       <div style="font-size:.65rem;font-family:'DM Mono',monospace;color:#a39e96;
                   letter-spacing:.1em;text-transform:uppercase;margin-bottom:.35rem;">
         MOB · Alza.cz
       </div>
       <div style="font-size:1.15rem;font-weight:400;color:#2c2922;
-                  font-family:'DM Serif Display',serif;">
+                  font-family:'DM Serif Display',serif;text-align:center;">
         Sprint Analytics
       </div>
     </div>
@@ -1229,17 +1239,7 @@ with st.sidebar:
             unsafe_allow_html=True,
         )
 
-    st.markdown("""
-    <div style="margin-top:1.2rem;padding-top:1rem;border-top:1px solid #e8e3d8;">
-      <div style="font-size:.65rem;font-family:'DM Mono',monospace;color:#c5bfb6;
-                  letter-spacing:.07em;text-transform:uppercase;margin-bottom:.45rem;">
-        Zdroje
-      </div>
-      <div style="font-size:.74rem;color:#a39e96;line-height:1.9;">
-        Atlassian · Parabol 2024<br>DORA Framework<br>Scrum Alliance
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
+
 
 
 uploaded = st.session_state.get("uploaded_file", None)
@@ -1333,22 +1333,16 @@ if not uploaded:
 # ─────────────────────────────────────────────
 
 st.markdown("""
-<div style="display:flex;align-items:flex-end;justify-content:space-between;
-            margin-bottom:1.6rem;padding-bottom:1rem;border-bottom:1.5px solid #e8e3d8;">
-  <div>
-    <div style="font-size:.65rem;font-family:'DM Mono',monospace;color:#a39e96;
-                letter-spacing:.1em;text-transform:uppercase;margin-bottom:.3rem;">
-      Alza.cz · Mobilní aplikace
-    </div>
-    <h1 style="font-size:2rem;font-weight:400;color:#2c2922;margin:0;
-               font-family:'DM Serif Display',serif;letter-spacing:-.02em;">
-      Sprint Analytics
-    </h1>
+<div style="text-align:center;margin-bottom:1.6rem;padding-bottom:1rem;border-bottom:1.5px solid #e8e3d8;">
+  <div style="font-size:.65rem;font-family:'DM Mono',monospace;color:#a39e96;
+              letter-spacing:.1em;text-transform:uppercase;margin-bottom:.3rem;">
+    Alza.cz · Mobilní aplikace
   </div>
-  <div style="font-size:.65rem;font-family:'DM Mono',monospace;
-              color:#c5bfb6;letter-spacing:.07em;padding-bottom:.3rem;">
-    MOB · Sprint 192
-  </div>
+  <h1 style="font-size:2rem;font-weight:400;color:#2c2922;margin:0;
+             font-family:'DM Serif Display',serif;letter-spacing:-.02em;
+             text-align:center;">
+    Sprint Analytics
+  </h1>
 </div>
 """, unsafe_allow_html=True)
 
@@ -1434,56 +1428,55 @@ section("🏆", "Sprint Health Score")
 
 health_score, breakdown = compute_health_score(metrics, outlier_ids)
 
-hs_color  = "#15803d" if health_score >= 80 else ("#b45309" if health_score >= 60 else "#b91c1c")
-hs_bg     = "#f0fdf4" if health_score >= 80 else ("#fefce8" if health_score >= 60 else "#fff1f2")
-hs_border = "#86efac" if health_score >= 80 else ("#fde68a" if health_score >= 60 else "#fca5a5")
-hs_shadow = "#c4f0d2" if health_score >= 80 else ("#fde68a" if health_score >= 60 else "#fca5a5")
+# Teplá paleta Health Score
+hs_color  = "#9a4a2a" if health_score >= 80 else ("#9a6a20" if health_score >= 60 else "#9a3020")
 hs_label  = ("Výborný sprint" if health_score >= 80
              else ("Dobrý sprint s rezervami" if health_score >= 60
                    else "Sprint potřebuje zlepšení"))
 
+# Teplé barvy karet: špatné=lososová, dobré=sage, varování=amber
+def card_colors(body):
+    if body < -10:  # špatné
+        return "#fff0eb", "#e8a898", "#c05040"
+    elif body < 0:  # varování
+        return "#fffbf0", "#e0c880", "#9a6a20"
+    else:
+        return "#f0f5ee", "#a8c8a0", "#4a8040"
+
 breakdown_html = ""
 for b in breakdown:
-    bc  = "#b91c1c" if b["body"] < -10 else ("#b45309" if b["body"] < 0 else "#15803d")
-    bb  = "#fff1f2" if b["body"] < -10 else ("#fefce8" if b["body"] < 0 else "#f0fdf4")
-    bbd = "#fca5a5" if b["body"] < -10 else ("#fde68a" if b["body"] < 0 else "#86efac")
-    ps  = str(b["body"]) if b["body"] != 0 else "±0"
+    bb, bbd, btxt = card_colors(b["body"])
+    ps = str(b["body"]) if b["body"] != 0 else "±0"
     breakdown_html += (
-        f'<div style="display:flex;align-items:center;gap:10px;background:{bb};'
-        f'border:1.5px solid {bbd};border-radius:10px;padding:.55rem 1rem;">'
-        f'<div style="font-size:1rem;font-weight:600;color:{bc};min-width:36px;'
-        f'font-family:\'DM Mono\',monospace;">{ps}</div>'
-        f'<div><div style="font-size:.84rem;font-weight:600;color:#2c2922;">{b["oblast"]}</div>'
-        f'<div style="font-size:.73rem;color:#6b6359;">{b["label"]}</div></div></div>'
+        f'<div style="background:{bb};border:1.5px solid {bbd};border-radius:10px;'
+        f'padding:.7rem 1rem;text-align:center;flex:1;min-width:160px;max-width:200px;">'
+        f'<div style="font-size:1.6rem;font-weight:700;color:{btxt};line-height:1;'
+        f'font-family:\'DM Serif Display\',serif;">{ps}</div>'
+        f'<div style="font-size:.82rem;font-weight:600;color:#2c2922;margin-top:.2rem;">{b["oblast"]}</div>'
+        f'<div style="font-size:.72rem;color:#6b6359;">{b["label"]}</div></div>'
     )
 if not breakdown_html:
-    breakdown_html = "<div style='font-size:.84rem;color:#15803d;padding:.5rem;'>✓ Žádné penalizace — sprint byl vzorový!</div>"
+    breakdown_html = "<div style='font-size:.84rem;color:#4a8040;padding:.5rem;'>✓ Žádné penalizace!</div>"
 
 st.markdown(f"""
-<div style="background:{hs_bg};border:2px solid {hs_border};border-radius:18px;
-            padding:1.7rem 2.2rem;display:flex;gap:2.5rem;align-items:flex-start;
-            flex-wrap:wrap;box-shadow:4px 5px 0 {hs_shadow};">
-  <div style="text-align:center;min-width:140px;">
+<div style="background:#fffef9;border:1.5px solid #e8e3d8;border-radius:18px;
+            padding:1.7rem 2.2rem;display:flex;flex-direction:column;
+            align-items:center;gap:1.2rem;box-shadow:2px 3px 0 #e0dbd2;">
+  <div style="text-align:center;">
     <div style="font-size:.64rem;font-family:'DM Mono',monospace;color:#a39e96;
-                text-transform:uppercase;letter-spacing:.1em;margin-bottom:.4rem;">
+                text-transform:uppercase;letter-spacing:.1em;margin-bottom:.3rem;">
       Health Score
     </div>
-    <div style="font-size:4.2rem;font-weight:400;color:{hs_color};line-height:1;
+    <div style="font-size:4.5rem;font-weight:400;color:{hs_color};line-height:1;
                 font-family:'DM Serif Display',serif;">{health_score}</div>
     <div style="font-size:.8rem;color:#a39e96;font-family:'DM Mono',monospace;">/100</div>
-    <div style="font-size:.84rem;font-weight:500;color:{hs_color};margin-top:.55rem;">
+    <div style="font-size:.84rem;font-weight:500;color:{hs_color};margin-top:.4rem;">
       {hs_label}
     </div>
-    <div style="font-size:.68rem;color:#a39e96;margin-top:.3rem;">orientační skóre</div>
+    <div style="font-size:.68rem;color:#a39e96;margin-top:.2rem;">orientační skóre</div>
   </div>
-  <div style="flex:1;min-width:280px;">
-    <div style="font-size:.64rem;font-family:'DM Mono',monospace;color:#a39e96;
-                text-transform:uppercase;letter-spacing:.08em;margin-bottom:.75rem;">
-      Co ovlivnilo skóre
-    </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px;">
-      {breakdown_html}
-    </div>
+  <div style="display:flex;flex-wrap:wrap;justify-content:center;gap:8px;width:100%;">
+    {breakdown_html}
   </div>
 </div>
 """, unsafe_allow_html=True)
