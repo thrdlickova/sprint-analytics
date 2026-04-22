@@ -1269,8 +1269,11 @@ if not uploaded:
       text-align:center!important;gap:6px!important;
       padding:.8rem!important;
     }
-    [data-testid="stFileUploaderDropzoneInstructions"]{
+    [data-testid="stFileUploaderDropzoneInstructions"],
+    [data-testid="stFileUploaderDropzoneInstructions"] > div,
+    [data-testid="stFileUploaderDropzoneInstructions"] > div > div {
       width:100%!important;text-align:center!important;
+      justify-content:center!important;align-items:center!important;
     }
     [data-testid="stFileUploaderDropzoneInstructions"] span{
       font-size:.72rem!important;color:#c5bfb6!important;
