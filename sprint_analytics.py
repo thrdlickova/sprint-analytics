@@ -52,18 +52,24 @@ TYPE_HATCHES = {"Story": "////",          "Bug": "xxxx",         "Bug Subtask": 
 
 
 def chart_setup(ax, fig=None):
-    """Konzistentní warm cream styl pro všechny grafy."""
+    """Konzistentní warm cream styl pro všechny grafy — sjednocené fonty."""
     if fig:
-        fig.patch.set_facecolor("#fafaf8")
-    ax.set_facecolor("#fafaf8")
+        fig.patch.set_facecolor("#fffef9")
+    ax.set_facecolor("#fffef9")
     ax.grid(True, color="#ece8e0", linewidth=0.55, linestyle="--", zorder=0, alpha=0.8)
     ax.set_axisbelow(True)
     for sp in ax.spines.values():
-        sp.set_edgecolor("#d4cfc6")
+        sp.set_edgecolor("#e8e3d8")
         sp.set_linewidth(0.8)
-    ax.tick_params(colors="#8a8375", labelsize=8.5, length=3, width=0.7)
-    ax.xaxis.label.set_color("#8a8375")
-    ax.yaxis.label.set_color("#8a8375")
+    # Sjednocené fonty — DM Mono styl pro osy
+    ax.tick_params(colors="#5c5449", labelsize=9, length=3, width=0.8)
+    for label in ax.get_xticklabels() + ax.get_yticklabels():
+        label.set_fontfamily("DejaVu Sans Mono")
+        label.set_color("#5c5449")
+    ax.xaxis.label.set_color("#5c5449")
+    ax.xaxis.label.set_fontfamily("DejaVu Sans Mono")
+    ax.yaxis.label.set_color("#5c5449")
+    ax.yaxis.label.set_fontfamily("DejaVu Sans Mono")
 
 
 # ─────────────────────────────────────────────
@@ -129,15 +135,31 @@ section[data-testid="stFileUploader"] > label { display:none!important; }
 
 /* ── Sidebar nav ── */
 [data-testid="stSidebar"] a{text-decoration:none!important}
-[data-testid="stSidebar"] a:hover{color:#6366f1!important}
+[data-testid="stSidebar"] a:hover{color:#c07860!important}
 /* Sidebar: skryj upload box a header, nech jen Navigace */
 [data-testid="stSidebar"] [data-testid="stFileUploader"] { display:none!important; }
 [data-testid="stSidebarHeader"] { display:none!important; }
 [data-testid="stSidebarContent"] { padding-top:0!important; }
-/* Sidebar: plná čára místo dashed */
-[data-testid="stSidebar"] [data-testid="stFileUploader"] {
-  border:none!important; border-top:1.5px solid #e8e3d8!important;
+
+/* ── Sjednocení fontů napříč app ── */
+/* Velká čísla metrik — serif */
+[data-testid="stMetricValue"] {
+  font-family:'DM Serif Display',serif!important;
+  font-weight:400!important;
 }
+/* Popisky metrik — mono */
+[data-testid="stMetricLabel"] {
+  font-family:'DM Mono',monospace!important;
+  font-size:.65rem!important;
+  letter-spacing:.08em!important;
+  text-transform:uppercase!important;
+}
+/* Sekce nadpisy — serif */
+.sec-ttl { font-family:'DM Serif Display',serif!important; font-weight:400!important; }
+/* Tabulka hodnoty — sans */
+.dt td { font-family:'DM Sans',sans-serif!important; }
+/* Tabulka mono hodnoty */
+.dt .mono { font-family:'DM Mono',monospace!important; }
 
 /* ── Alerts & expanders ── */
 div[data-testid="stAlert"]{
@@ -659,12 +681,19 @@ def draw_burndown(issues_df, mapping, sprint_start, sprint_end):
     ax.set_ylabel("Story points", color="#a39e96", fontsize=9)
     ax.set_xlim(sprint_start, sprint_end)
     ax.set_ylim(0, total_sp * 1.12)
-    ax.tick_params(colors="#5c5449", labelsize=9.5, length=3, width=0.8)
-    plt.xticks(rotation=35, ha="right", color="#5c5449", fontsize=9.5, fontweight='medium')
-    plt.yticks(color="#5c5449", fontsize=9.5, fontweight='medium')
-    ax.set_ylabel("Story points", color="#5c5449", fontsize=10)
+    ax.tick_params(colors="#5c5449", labelsize=9, length=3, width=0.8)
+    for label in ax.get_xticklabels():
+        label.set_fontfamily("DejaVu Sans Mono")
+        label.set_color("#5c5449")
+    for label in ax.get_yticklabels():
+        label.set_fontfamily("DejaVu Sans Mono")
+        label.set_color("#5c5449")
+    plt.xticks(rotation=35, ha="right")
+    ax.set_ylabel("Story points", color="#5c5449", fontsize=9,
+                  fontfamily="DejaVu Sans Mono")
     ax.legend(loc="upper right", frameon=True, facecolor="#fffef9",
-              edgecolor="#e8e3d8", labelcolor="#5c5449", fontsize=9.5, framealpha=0.95)
+              edgecolor="#e8e3d8", labelcolor="#5c5449", fontsize=9,
+              prop={"family": "DejaVu Sans Mono"}, framealpha=0.95)
     plt.tight_layout(pad=0.6)
 
     final_pct = round(actual[-1] / total_sp * 100) if total_sp > 0 else 0
@@ -714,16 +743,18 @@ def draw_time_by_type(df, mapping):
         at.set_fontweight("bold")
         at.set_color("#fffef9")
 
-    # Střed
+    # Střed — serif font pro číslo, mono pro popisek
     ax.text(0,  0.08, f"{total_h:.0f}h", ha="center", va="center",
-            fontsize=15, fontweight="600", color="#2c2922")
+            fontsize=15, fontweight="bold", color="#2c2922",
+            fontfamily="DejaVu Serif")
     ax.text(0, -0.18, "celkem", ha="center", va="center",
-            fontsize=8.5, color="#a39e96")
+            fontsize=8.5, color="#a39e96", fontfamily="DejaVu Sans Mono")
 
     legend_labels = [f"{row[type_col]}  {row['_total_h']:.0f}h" for _, row in by_type.iterrows()]
     ax.legend(wedges, legend_labels, loc="lower center",
               bbox_to_anchor=(0.5, -0.1), ncol=len(by_type),
-              frameon=False, fontsize=9, labelcolor="#5c5449")
+              frameon=False, fontsize=9, labelcolor="#5c5449",
+              prop={"family": "DejaVu Sans Mono"})
     plt.tight_layout(pad=0.3)
     return fig
 
@@ -773,7 +804,8 @@ def draw_unplanned_work(df, mapping):
     ax.set_yticks([])
     ax.set_xticks([])
     ax.legend(loc="lower center", bbox_to_anchor=(0.5, -0.8), ncol=2,
-              frameon=False, fontsize=9, labelcolor="#5c5449")
+              frameon=False, fontsize=9, labelcolor="#5c5449",
+              prop={"family": "DejaVu Sans Mono"})
     plt.tight_layout(pad=0.2)
     return fig
 
@@ -827,8 +859,8 @@ def draw_estimation_by_sp(df, mapping):
                  f"{row['mean_h']:.1f}h", ha="center", fontsize=8.5, color="#6366f1")
     ax1.set_xticks(x1)
     ax1.set_xticklabels([f"{int(s)} SP" for s in sp_vals])
-    ax1.set_ylabel("Průměr hodin", color="#a39e96", fontsize=9)
-    ax1.set_title("Průměrný vykázaný čas na SP", fontsize=10, color="#3d382f", pad=10)
+    ax1.set_ylabel("Průměr hodin", color="#5c5449", fontsize=9, fontfamily="DejaVu Sans Mono")
+    ax1.set_title("Průměrný vykázaný čas na SP", fontsize=10, color="#2c2922", pad=10, fontfamily="DejaVu Sans Mono")
 
     # Pravý — odchylka od průměru
     def _color(r):
@@ -855,8 +887,8 @@ def draw_estimation_by_sp(df, mapping):
     ax2.axhline(y=-30, color=PASTEL["green"],  linewidth=0.9, linestyle="--")
     ax2.set_xticks(x2)
     ax2.set_xticklabels(uniq[id_col].tolist(), rotation=40, ha="right", fontsize=7.5)
-    ax2.set_ylabel("Odchylka od průměru SP (%)", color="#a39e96", fontsize=9)
-    ax2.set_title("Nad/podhodnocení vs. průměr pro dané SP", fontsize=10, color="#3d382f", pad=10)
+    ax2.set_ylabel("Odchylka od průměru SP (%)", color="#5c5449", fontsize=9, fontfamily="DejaVu Sans Mono")
+    ax2.set_title("Nad/podhodnocení vs. průměr pro dané SP", fontsize=10, color="#2c2922", pad=10, fontfamily="DejaVu Sans Mono")
 
     legend_elements = [
         mpatches.Patch(facecolor=PASTEL["red"],    hatch="xxxx", edgecolor="#fff", label="> 130% průměru"),
@@ -917,7 +949,7 @@ def draw_flow_state_cards(df, mapping):
     )
     fe = round(active_h / total_h * 100, 1) if total_h > 0 else None
 
-    fig, axes = plt.subplots(1, 5, figsize=(13, 2.8), dpi=180)
+    fig, axes = plt.subplots(1, 5, figsize=(13, 3.2), dpi=180)
     fig.patch.set_facecolor("#f7f4ef")
 
     for ax, (label, days, color) in zip(axes, avgs):
@@ -928,15 +960,16 @@ def draw_flow_state_cards(df, mapping):
         ax.set_xticks([]); ax.set_yticks([])
         ax.set_xlim(0, 1); ax.set_ylim(0, 1)
 
-        ax.text(0.5, 0.82, label, ha="center", va="center",
+        # Nadpis stavu — větší, výše
+        ax.text(0.5, 0.88, label, ha="center", va="center",
                 fontsize=10, color="#5c5449", fontfamily="monospace",
                 transform=ax.transAxes)
         val_str = f"{days}" if days is not None else "—"
-        ax.text(0.5, 0.48, val_str, ha="center", va="center",
-                fontsize=28, color="#2c2922",
+        ax.text(0.5, 0.52, val_str, ha="center", va="center",
+                fontsize=30, color="#2c2922",
                 fontfamily="DejaVu Serif", transform=ax.transAxes)
-        ax.text(0.5, 0.15, "dní průměrně", ha="center", va="center",
-                fontsize=7.5, color="#a39e96", transform=ax.transAxes)
+        ax.text(0.5, 0.18, "dní průměrně", ha="center", va="center",
+                fontsize=8, color="#a39e96", transform=ax.transAxes)
 
         rect = plt.Rectangle((0, 0), 1, 0.06, color=color,
                               transform=ax.transAxes, clip_on=False)
@@ -1224,19 +1257,7 @@ if "uploaded_file" not in st.session_state:
 # ─────────────────────────────────────────────
 
 with st.sidebar:
-    st.markdown("""
-    <div style="padding:.6rem 0 1.2rem;text-align:center;">
-      <div style="font-size:.65rem;font-family:'DM Mono',monospace;color:#a39e96;
-                  letter-spacing:.1em;text-transform:uppercase;margin-bottom:.35rem;">
-        MOB · Alza.cz
-      </div>
-      <div style="font-size:1.15rem;font-weight:400;color:#2c2922;
-                  font-family:'DM Serif Display',serif;text-align:center;">
-        Sprint Analytics
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
-
+    # Sidebar uploader — skrytý v CSS, jen pro případ nahrání přes sidebar
     uploaded_sidebar = st.file_uploader(
         "Nahraj export",
         type=["csv","json"],
@@ -1245,10 +1266,12 @@ with st.sidebar:
     if uploaded_sidebar is not None:
         st.session_state["uploaded_file"] = uploaded_sidebar
 
+    # Navigace — serif font, zarovnáno s textem nav položek, plná linka pod i nad
     st.markdown("""
-    <div style="margin-top:.6rem;">
-      <div style="font-size:.65rem;font-family:'DM Mono',monospace;color:#a39e96;
-                  letter-spacing:.09em;text-transform:uppercase;margin-bottom:.7rem;">
+    <div style="padding-left:1.4rem;margin-bottom:.5rem;padding-bottom:.6rem;
+                border-bottom:1.5px solid #e8e3d8;padding-top:.7rem;">
+      <div style="font-size:1rem;font-weight:400;color:#2c2922;
+                  font-family:'DM Serif Display',serif;">
         Navigace
       </div>
     </div>
