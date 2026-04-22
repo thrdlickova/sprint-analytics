@@ -137,13 +137,11 @@ button[data-testid="baseButton-minimal"] > div > span { font-size:0!important; }
   width:0!important;overflow:hidden!important;
 }
 
-/* Skryj prázdný "add another file" button a jeho wrapper po uploadu */
+/* Skryj prázdný "add another file" button — stFileChip obsahuje X + prázdný button */
+[data-testid="stFileChip"] [data-testid="stBaseButton-minimal"] { display:none!important; }
+/* Fallback: sidebar secondary button */
+[data-testid="stFileUploader"] [data-testid="stBaseButton-secondary"] { display:none!important; }
 [data-testid="stFileUploaderDropzone"] ~ div { display:none!important; }
-[data-testid="stFileUploaderFile"] ~ div { display:none!important; }
-[data-testid="stFileUploader"] [data-testid="stFileUploaderDropzone"] + div { display:none!important; }
-/* Skryj druhé tlačítko v file upload zóně (prázdný button vedle X) */
-[data-testid="stFileUploaderFile"] + button,
-[data-testid="stFileUploaderFile"] ~ button { display:none!important; }
 
 /* File uploader stylování — sidebar i main */
 [data-testid="stFileUploader"]{
@@ -1216,6 +1214,12 @@ def generate_retro_topics(metrics, outlier_ids, sprint_goal):
 
 
 # ─────────────────────────────────────────────
+# SESSION STATE — persistent upload
+# ─────────────────────────────────────────────
+if "uploaded_file" not in st.session_state:
+    st.session_state["uploaded_file"] = None
+
+# ─────────────────────────────────────────────
 # SIDEBAR + UPLOAD
 # ─────────────────────────────────────────────
 
@@ -1233,11 +1237,13 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
-    uploaded = st.file_uploader(
+    uploaded_sidebar = st.file_uploader(
         "Nahraj export",
         type=["csv","json"],
         label_visibility="collapsed",
     )
+    if uploaded_sidebar is not None:
+        st.session_state["uploaded_file"] = uploaded_sidebar
 
     st.markdown("""
     <div style="margin-top:.6rem;">
@@ -1283,6 +1289,8 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
 
+uploaded = st.session_state.get("uploaded_file", None)
+
 # ─────────────────────────────────────────────
 # HEADER
 # ─────────────────────────────────────────────
@@ -1307,7 +1315,7 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# ── Prázdný stav — skutečný uploader v hlavní ploše ──
+# ── Prázdný stav — uploader v hlavní ploše + session state ──
 if not uploaded:
     st.markdown("""
     <div style="margin-top:2rem;margin-bottom:.5rem;text-align:center;">
@@ -1327,9 +1335,11 @@ if not uploaded:
             "Nahraj CSV nebo JSON",
             type=["csv", "json"],
             label_visibility="collapsed",
+            key="main_uploader",
         )
     if uploaded_main is not None:
-        uploaded = uploaded_main
+        st.session_state["uploaded_file"] = uploaded_main
+        st.rerun()
     else:
         st.stop()
 
