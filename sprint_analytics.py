@@ -64,7 +64,7 @@ def chart_setup(ax, fig=None):
     # Sjednocené fonty — DM Mono styl pro osy
     ax.tick_params(colors="#5c5449", labelsize=9, length=3, width=0.8)
     for label in ax.get_xticklabels() + ax.get_yticklabels():
-        label.set_fontfamily("DejaVu Sans Mono")
+        label.set_fontfamily("DejaVu Serif")
         label.set_color("#5c5449")
     ax.xaxis.label.set_color("#5c5449")
     ax.xaxis.label.set_fontfamily("DejaVu Sans Mono")
@@ -669,6 +669,7 @@ def draw_burndown(issues_df, mapping, sprint_start, sprint_end):
             xy=(dates[-1], actual[-1]),
             fontsize=8.5, color="#5c5449",
             va="bottom", ha="right",
+            fontfamily="DejaVu Serif",
         )
 
     # Víkendy — jemné šedé pozadí
@@ -683,10 +684,10 @@ def draw_burndown(issues_df, mapping, sprint_start, sprint_end):
     ax.set_ylim(0, total_sp * 1.12)
     ax.tick_params(colors="#5c5449", labelsize=9, length=3, width=0.8)
     for label in ax.get_xticklabels():
-        label.set_fontfamily("DejaVu Sans Mono")
+        label.set_fontfamily("DejaVu Serif")
         label.set_color("#5c5449")
     for label in ax.get_yticklabels():
-        label.set_fontfamily("DejaVu Sans Mono")
+        label.set_fontfamily("DejaVu Serif")
         label.set_color("#5c5449")
     plt.xticks(rotation=35, ha="right")
     ax.set_ylabel("Story points", color="#5c5449", fontsize=9,
@@ -742,6 +743,7 @@ def draw_time_by_type(df, mapping):
         at.set_fontsize(11)
         at.set_fontweight("bold")
         at.set_color("#fffef9")
+        at.set_fontfamily("DejaVu Serif")
 
     # Střed — serif font pro číslo, mono pro popisek
     ax.text(0,  0.08, f"{total_h:.0f}h", ha="center", va="center",
@@ -794,10 +796,12 @@ def draw_unplanned_work(df, mapping):
 
     ax.text(planned_h / 2, 0,
             f"{planned_h:.0f} h\n{round(planned_h/total*100)}%",
-            ha="center", va="center", fontsize=9, color="#fffef9", fontweight="bold")
+            ha="center", va="center", fontsize=9, color="#fffef9", fontweight="bold",
+            fontfamily="DejaVu Serif")
     ax.text(planned_h + unplanned_h / 2, 0,
             f"{unplanned_h:.0f} h\n{round(unplanned_h/total*100)}%",
-            ha="center", va="center", fontsize=9, color="#5c5449", fontweight="bold")
+            ha="center", va="center", fontsize=9, color="#5c5449", fontweight="bold",
+            fontfamily="DejaVu Serif")
 
     for sp in ax.spines.values():
         sp.set_visible(False)
@@ -840,64 +844,59 @@ def draw_estimation_by_sp(df, mapping):
     uniq["_ratio"]= (uniq["_h"] / uniq["_exp"]).round(2)
     uniq["_dev"]  = uniq["_ratio"] - 1.0
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 3.8))
-    fig.patch.set_facecolor("#fafaf8")
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 3.8), dpi=180)
+    fig.patch.set_facecolor("#fffef9")
     for ax in [ax1, ax2]:
         chart_setup(ax, fig)
 
     sp_vals = stats["sp"].tolist()
     x1 = list(range(len(sp_vals)))
 
-    # Levý — průměr h per SP, šrafované sloupce
-    ax1.bar(x1, stats["mean_h"], color=PASTEL["blue"], width=0.5,
-            hatch="////", edgecolor="#ffffff", linewidth=0.0, alpha=0.9)
+    # Levý — průměr h per SP, teplá paleta bez šrafování
+    ax1.bar(x1, stats["mean_h"], color="#c07860", width=0.5, edgecolor="none", alpha=0.85)
     ax1.errorbar(x1, stats["mean_h"], yerr=stats["std_h"],
                  fmt="none", color="#a39e96", capsize=5, linewidth=1.2, capthick=1.2)
     for i, row in stats.iterrows():
         idx = sp_vals.index(row["sp"])
-        ax1.text(idx, row["mean_h"] + row["std_h"] + 0.4,
-                 f"{row['mean_h']:.1f}h", ha="center", fontsize=8.5, color="#6366f1")
+        idx2 = sp_vals.index(row["sp"])
+        ax1.text(idx2, row["mean_h"] + row["std_h"] + 0.4,
+                 f"{row['mean_h']:.1f}h", ha="center", fontsize=8.5, color="#c07860",
+                 fontfamily="DejaVu Serif")
     ax1.set_xticks(x1)
-    ax1.set_xticklabels([f"{int(s)} SP" for s in sp_vals])
+    ax1.set_xticklabels([f"{int(s)} SP" for s in sp_vals], fontfamily="DejaVu Serif")
     ax1.set_ylabel("Průměr hodin", color="#5c5449", fontsize=9, fontfamily="DejaVu Sans Mono")
     ax1.set_title("Průměrný vykázaný čas na SP", fontsize=10, color="#2c2922", pad=10, fontfamily="DejaVu Sans Mono")
 
     # Pravý — odchylka od průměru
     def _color(r):
-        if r > 1.3:  return PASTEL["red"]
-        if r > 1.1:  return PASTEL["yellow"]
-        if r < 0.9:  return PASTEL["green"]
-        return PASTEL["blue"]
-
-    def _hatch(r):
-        if r > 1.3:  return "xxxx"
-        if r > 1.1:  return "...."
-        if r < 0.9:  return "\\\\\\\\"
-        return "////"
+        if r > 1.3:  return "#f5c4b0"
+        if r > 1.1:  return "#e8d090"
+        if r < 0.9:  return "#b8d4b0"
+        return "#d4cfc6"
 
     x2 = list(range(len(uniq)))
     for xi, (_, row) in enumerate(uniq.iterrows()):
         ax2.bar(xi, row["_dev"] * 100,
                 color=_color(row["_ratio"]),
-                hatch=_hatch(row["_ratio"]),
-                edgecolor="#ffffff", linewidth=0.0, width=0.6, alpha=0.9)
+                edgecolor="none", width=0.6)
 
     ax2.axhline(y=0,   color="#a39e96", linewidth=1.2)
     ax2.axhline(y=30,  color=PASTEL["yellow"], linewidth=0.9, linestyle="--")
     ax2.axhline(y=-30, color=PASTEL["green"],  linewidth=0.9, linestyle="--")
     ax2.set_xticks(x2)
-    ax2.set_xticklabels(uniq[id_col].tolist(), rotation=40, ha="right", fontsize=7.5)
+    ax2.set_xticklabels(uniq[id_col].tolist(), rotation=40, ha="right", fontsize=7.5, fontfamily="DejaVu Sans Mono")
     ax2.set_ylabel("Odchylka od průměru SP (%)", color="#5c5449", fontsize=9, fontfamily="DejaVu Sans Mono")
     ax2.set_title("Nad/podhodnocení vs. průměr pro dané SP", fontsize=10, color="#2c2922", pad=10, fontfamily="DejaVu Sans Mono")
 
     legend_elements = [
-        mpatches.Patch(facecolor=PASTEL["red"],    hatch="xxxx", edgecolor="#fff", label="> 130% průměru"),
-        mpatches.Patch(facecolor=PASTEL["yellow"], hatch="....", edgecolor="#fff", label="110–130%"),
-        mpatches.Patch(facecolor=PASTEL["blue"],   hatch="////", edgecolor="#fff", label="90–110% (norma)"),
-        mpatches.Patch(facecolor=PASTEL["green"],  hatch="\\\\", edgecolor="#fff", label="< 90% (rychleji)"),
+        mpatches.Patch(facecolor="#f5c4b0", edgecolor="none", label="> 130% průměru"),
+        mpatches.Patch(facecolor="#e8d090", edgecolor="none", label="110–130%"),
+        mpatches.Patch(facecolor="#d4cfc6", edgecolor="none", label="90–110% (norma)"),
+        mpatches.Patch(facecolor="#b8d4b0", edgecolor="none", label="< 90% (rychleji)"),
     ]
     ax2.legend(handles=legend_elements, loc="upper right", frameon=True,
-               facecolor="#fffef9", edgecolor="#e8e3d8", fontsize=8, labelcolor="#5c5449")
+               facecolor="#fffef9", edgecolor="#e8e3d8", fontsize=8, labelcolor="#5c5449",
+               prop={"family": "DejaVu Sans Mono"})
     plt.tight_layout(pad=0.6)
 
     over = uniq[uniq["_ratio"] > 1.3][[id_col, "_sp", "_h", "_ratio"]].copy()
@@ -975,7 +974,7 @@ def draw_flow_state_cards(df, mapping):
                               transform=ax.transAxes, clip_on=False)
         ax.add_patch(rect)
 
-    plt.tight_layout(pad=0.5)
+    plt.subplots_adjust(left=0.01, right=0.99, top=0.95, bottom=0.08, wspace=0.08)
     return fig, fe
 
 
