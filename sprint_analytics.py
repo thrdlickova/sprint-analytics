@@ -349,9 +349,21 @@ div[data-testid="stAlert"]{
 def parse_date(val):
     if pd.isna(val) or str(val).strip() == "":
         return None
-    for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"]:
+    import re as _re
+    s = str(val).strip()
+    # Normalize timezone: +0200 → +02:00
+    s = _re.sub(r'([+-])(\d{2})(\d{2})$', r'\1\2:\3', s)
+    # Try with timezone
+    for fmt in ["%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z"]:
         try:
-            return datetime.strptime(str(val).strip()[:19], fmt[:19])
+            dt = datetime.strptime(s, fmt)
+            return dt.replace(tzinfo=None)
+        except Exception:
+            pass
+    # Try without timezone (first 19 chars)
+    for fmt in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"]:
+        try:
+            return datetime.strptime(s[:19], fmt[:19])
         except Exception:
             pass
     return None
@@ -410,13 +422,19 @@ def detect_columns(cols):
         "time_testing":         ["time_in_testing"],
         "time_blocked":         ["time_blocked"],
         "parent_issue":         ["parent_issue"],
+        "timespent":            ["timespent_h", "timespent"],
+        "total_timespent":      ["total_timespent_h", "total_timespent"],
     }
     mapping = {}
     for field, keywords in cands.items():
         for i, col in enumerate(cl):
-            if any(col == kw or kw in col for kw in keywords):
-                mapping[field] = cols[i]
-                break
+            # sprint: přesná shoda jen, aby sprint_start neskočil pod sprint
+            if field == "sprint":
+                if col == "sprint":
+                    mapping[field] = cols[i]; break
+            else:
+                if any(col == kw or kw in col for kw in keywords):
+                    mapping[field] = cols[i]; break
     return mapping
 
 
@@ -468,13 +486,13 @@ def compute_metrics(df, mapping):
     # Velocity
     if "story_points" in mapping:
         issues["_sp"] = pd.to_numeric(issues[mapping["story_points"]], errors="coerce").fillna(0)
-        main = (issues[~issues[type_col].astype(str).str.lower().str.contains("subtask")]
+        main = (issues[~issues[type_col].astype(str).str.lower().str.contains("subtask|sub-task")]
                 if type_col else issues)
         metrics["velocity"] = int(main["_sp"].sum())
 
     # Done / spillover
     if "status" in mapping:
-        done_kw  = ["done", "closed", "resolved"]
+        done_kw  = ["done", "closed", "resolved", "to release", "to merge"]
         issues["_done"] = issues[mapping["status"]].astype(str).str.lower().apply(
             lambda x: any(kw in x for kw in done_kw))
         total = len(issues)
@@ -507,11 +525,11 @@ def compute_metrics(df, mapping):
 
     # Chybovost nových features (Bug Subtasky = chyby nalezené při testování stories)
     if type_col and "parent_issue" in mapping:
-        subtasks = issues[issues[type_col].astype(str).str.lower().str.contains("subtask")]
+        subtasks = issues[issues[type_col].astype(str).str.lower().str.contains("subtask|sub-task")]
         stories  = issues[issues[type_col].astype(str).str.lower() == "story"]
         metrics["defect_count"] = len(subtasks)
         metrics["defect_open"]  = (
-            int((subtasks[mapping["status"]].astype(str).str.lower() != "done").sum())
+            int((subtasks[mapping["status"]].astype(str).str.lower() not in ["done","closed","to release","to merge"]).sum())
             if "status" in mapping else 0)
         # Defect rate = počet bug subtasků / počet stories × 100
         metrics["defect_rate"]  = (
@@ -617,7 +635,7 @@ def draw_burndown(issues_df, mapping, sprint_start, sprint_end):
 
     main = issues_df
     if type_col:
-        main = issues_df[~issues_df[type_col].astype(str).str.lower().str.contains("subtask")]
+        main = issues_df[~issues_df[type_col].astype(str).str.lower().str.contains("subtask|sub-task")]
 
     total_sp = pd.to_numeric(main[sp_col], errors="coerce").fillna(0).sum()
     days     = (sprint_end - sprint_start).days + 1
@@ -722,7 +740,7 @@ def draw_time_by_type(df, mapping):
         return None
 
     # Teplá pastelová paleta bez šrafování
-    WARM_PIE = {"Story": "#c07860", "Bug": "#e8c4b0", "Bug Subtask": "#d4a898"}
+    WARM_PIE = {"Story": "#c07860", "Bug": "#e8c4b0", "Bug Subtask": "#d4a898", "BugSubtask": "#d4a898", "Sub-task": "#d4cfc6"}
     pie_colors = [WARM_PIE.get(t, "#d4cfc6") for t in by_type[type_col]]
     total_h    = by_type["_total_h"].sum()
 
@@ -828,7 +846,7 @@ def draw_estimation_by_sp(df, mapping):
 
     uniq = df.groupby(id_col).first().reset_index()
     if type_col:
-        uniq = uniq[~uniq[type_col].astype(str).str.lower().str.contains("subtask")]
+        uniq = uniq[~uniq[type_col].astype(str).str.lower().str.contains("subtask|sub-task")]
     uniq["_sp"] = pd.to_numeric(uniq[sp_col], errors="coerce")
     uniq["_h"]  = pd.to_numeric(uniq[prog_col], errors="coerce").fillna(0)
     uniq = uniq[(uniq["_sp"] > 0) & (uniq["_h"] > 0)]
@@ -1421,7 +1439,12 @@ if "sprint_start" in mapping and not df[mapping["sprint_start"]].dropna().empty:
 if "sprint_end" in mapping and not df[mapping["sprint_end"]].dropna().empty:
     sprint_end = parse_date(df[mapping["sprint_end"]].dropna().iloc[0])
 
-sprint_name  = df[mapping["sprint"]].dropna().iloc[0] if "sprint" in mapping else "Sprint"
+if "sprint" in mapping and not df[mapping["sprint"]].dropna().empty:
+    sprint_name = df[mapping["sprint"]].dropna().iloc[0]
+elif sprint_start and sprint_end:
+    sprint_name = f"{sprint_start.strftime('%d.%m')} – {sprint_end.strftime('%d.%m')}"
+else:
+    sprint_name = "Sprint"
 duration     = (f"{sprint_start.strftime('%d.%m')} – {sprint_end.strftime('%d.%m.%Y')}"
                 if sprint_start and sprint_end else "—")
 total_issues = metrics.get("total_count", len(issues_df))
@@ -1603,7 +1626,7 @@ if metrics.get("spillover_count", 0) > 0:
     status_col = mapping.get("status")
 
     uniq_spill   = issues_df.groupby(id_col).first().reset_index()
-    done_kw      = ["done","closed","resolved"]
+    done_kw      = ["done","closed","resolved","to release","to merge"]
     spill_issues = (
         uniq_spill[~uniq_spill[status_col].astype(str).str.lower().apply(
             lambda x: any(kw in x for kw in done_kw))]
