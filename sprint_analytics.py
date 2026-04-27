@@ -7,6 +7,7 @@ import matplotlib.dates as mdates
 import matplotlib.patches as mpatches
 import numpy as np
 import json
+import re
 from datetime import datetime, timedelta
 import io
 import html as hl
@@ -349,10 +350,9 @@ div[data-testid="stAlert"]{
 def parse_date(val):
     if pd.isna(val) or str(val).strip() == "":
         return None
-    import re as _re
     s = str(val).strip()
     # Normalize timezone: +0200 → +02:00
-    s = _re.sub(r'([+-])(\d{2})(\d{2})$', r'\1\2:\3', s)
+    s = re.sub(r'([+-])(\d{2})(\d{2})$', r'\1\2:\3', s)
     # Try with timezone
     for fmt in ["%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z"]:
         try:
