@@ -539,14 +539,28 @@ def compute_metrics(df, mapping):
         metrics["bug_subtask_count"] = metrics["defect_count"]
         metrics["bug_subtask_open"]  = metrics["defect_open"]
 
-    # Flow efficiency
+    # Flow efficiency — cap časy na délku sprintu (issues staré před sprintem mají obří time_in_todo_h)
+    sprint_start_col = mapping.get("sprint_start")
+    sprint_end_col   = mapping.get("sprint_end")
+    sprint_h = None
+    if sprint_start_col and sprint_end_col and sprint_start_col in df.columns:
+        s_start = parse_date(df[sprint_start_col].dropna().iloc[0]) if not df[sprint_start_col].dropna().empty else None
+        s_end   = parse_date(df[sprint_end_col].dropna().iloc[0])   if not df[sprint_end_col].dropna().empty else None
+        if s_start and s_end:
+            sprint_h = (s_end - s_start).total_seconds() / 3600  # délka sprintu v hodinách
+
     tk = [mapping.get(k) for k in ["time_todo","time_progress","time_review","time_testing","time_blocked"]
           if mapping.get(k) and mapping.get(k) in df.columns]
     ak = [mapping.get(k) for k in ["time_progress","time_review","time_testing"]
           if mapping.get(k) and mapping.get(k) in df.columns]
     if tk:
-        total_h  = sum(pd.to_numeric(df[c], errors="coerce").fillna(0).sum() for c in tk)
-        active_h = sum(pd.to_numeric(df[c], errors="coerce").fillna(0).sum() for c in ak)
+        def capped_sum(col):
+            vals = pd.to_numeric(df[col], errors="coerce").fillna(0)
+            if sprint_h:
+                vals = vals.clip(upper=sprint_h)
+            return vals.sum()
+        total_h  = sum(capped_sum(c) for c in tk)
+        active_h = sum(capped_sum(c) for c in ak)
         metrics["flow_efficiency"] = round(active_h / total_h * 100, 1) if total_h > 0 else None
         bc = mapping.get("time_blocked")
         metrics["blocked_h"] = (
@@ -716,7 +730,7 @@ def draw_burndown(issues_df, mapping, sprint_start, sprint_end):
               prop={"family": "DejaVu Sans Mono"}, framealpha=0.95)
     plt.tight_layout(pad=0.6)
 
-    final_pct = round(actual[-1] / total_sp * 100) if total_sp > 0 else 0
+    final_pct = round(actual[-1] / total_sp * 100) if (total_sp > 0 and actual) else 0
     return fig, final_pct
 
 
@@ -940,12 +954,24 @@ def draw_flow_state_cards(df, mapping):
         ("Čekání",      mapping.get("time_todo"),     "#e8e3d8"),
         ("Blokováno",   mapping.get("time_blocked"),  "#f5c4b0"),
     ]
-    # Průměrné hodiny → dny (8h = 1 den)
+    # Cap časy na délku sprintu (staré issues mají obří time_in_todo_h)
+    sprint_start_col = mapping.get("sprint_start")
+    sprint_end_col   = mapping.get("sprint_end")
+    sprint_h = None
+    if sprint_start_col and sprint_end_col and sprint_start_col in df.columns:
+        s_start = parse_date(df[sprint_start_col].dropna().iloc[0]) if not df[sprint_start_col].dropna().empty else None
+        s_end   = parse_date(df[sprint_end_col].dropna().iloc[0])   if not df[sprint_end_col].dropna().empty else None
+        if s_start and s_end:
+            sprint_h = (s_end - s_start).total_seconds() / 3600
+
     uniq = df.groupby(id_col).first().reset_index()
     avgs = []
     for label, col, color in states:
         if col and col in df.columns:
-            avg_h = pd.to_numeric(uniq[col], errors="coerce").fillna(0).mean()
+            vals = pd.to_numeric(uniq[col], errors="coerce").fillna(0)
+            if sprint_h:
+                vals = vals.clip(upper=sprint_h)
+            avg_h = vals.mean()
             avg_d = round(avg_h / 8, 1)
             avgs.append((label, avg_d, color))
         else:
@@ -955,13 +981,19 @@ def draw_flow_state_cards(df, mapping):
         return None
 
     # Flow efficiency pro info
+    def capped_mean(col):
+        vals = pd.to_numeric(uniq[col], errors="coerce").fillna(0)
+        if sprint_h:
+            vals = vals.clip(upper=sprint_h)
+        return vals.mean()
+
     active_h = sum(
-        pd.to_numeric(uniq[mapping.get(k)], errors="coerce").fillna(0).mean()
+        capped_mean(mapping.get(k))
         for k in ["time_progress","time_review","time_testing"]
         if mapping.get(k) and mapping.get(k) in df.columns
     )
     total_h = sum(
-        pd.to_numeric(uniq[mapping.get(k)], errors="coerce").fillna(0).mean()
+        capped_mean(mapping.get(k))
         for k in ["time_progress","time_review","time_testing","time_todo","time_blocked"]
         if mapping.get(k) and mapping.get(k) in df.columns
     )
