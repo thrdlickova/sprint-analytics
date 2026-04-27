@@ -532,8 +532,8 @@ def compute_metrics(df, mapping):
         metrics["defect_open"]  = (
             int((~subtasks[mapping["status"]].astype(str).str.lower().isin(done_kw_set)).sum())
             if "status" in mapping else 0)
-        # Defect rate = počet bug subtasků / počet stories × 100
-        # Defect rate = bugy (bez subtasků) / všechna main issues × 100
+        # Defect rate = bugy / všechna main issues × 100
+        main_i = issues[~issues[type_col].astype(str).str.lower().str.contains("subtask|sub-task")]
         bugs_only = main_i[main_i[type_col].astype(str).str.lower().str.contains("^bug$", regex=True)]
         metrics["defect_rate"] = (
             round(len(bugs_only) / len(main_i) * 100, 1) if len(main_i) > 0 else 0)
