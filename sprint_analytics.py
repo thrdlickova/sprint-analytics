@@ -533,8 +533,10 @@ def compute_metrics(df, mapping):
             int((~subtasks[mapping["status"]].astype(str).str.lower().isin(done_kw_set)).sum())
             if "status" in mapping else 0)
         # Defect rate = počet bug subtasků / počet stories × 100
-        metrics["defect_rate"]  = (
-            round(len(subtasks) / len(stories) * 100, 1) if len(stories) > 0 else 0)
+        # Defect rate = bugy (bez subtasků) / všechna main issues × 100
+        bugs_only = main_i[main_i[type_col].astype(str).str.lower().str.contains("^bug$", regex=True)]
+        metrics["defect_rate"] = (
+            round(len(bugs_only) / len(main_i) * 100, 1) if len(main_i) > 0 else 0)
         # Zpětná kompatibilita
         metrics["bug_subtask_count"] = metrics["defect_count"]
         metrics["bug_subtask_open"]  = metrics["defect_open"]
@@ -747,7 +749,10 @@ def draw_burndown(issues_df, mapping, sprint_start, sprint_end):
               prop={"family": "DejaVu Sans Mono"}, framealpha=0.95)
     plt.tight_layout(pad=0.6)
 
-    final_pct = round(actual[-1] / total_sp * 100) if (total_sp > 0 and actual) else 0
+    if not actual:
+        plt.close(fig)
+        return None, None
+    final_pct = round(actual[-1] / total_sp * 100) if total_sp > 0 else 0
     return fig, final_pct
 
 
