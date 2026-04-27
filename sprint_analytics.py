@@ -384,9 +384,9 @@ def load_file(uploaded):
         for enc in ["utf-8", "cp1250", "latin1"]:
             try:
                 text = raw.decode(enc)
-                for sep in [",", ";", "\t"]:
+                for sep in ["\t", ",", ";", "|"]:
                     try:
-                        df = pd.read_csv(io.StringIO(text), sep=sep)
+                        df = pd.read_csv(io.StringIO(text), sep=sep, engine="python")
                         if len(df.columns) > 1:
                             return df, None
                     except Exception:
