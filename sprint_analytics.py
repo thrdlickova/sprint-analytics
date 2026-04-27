@@ -539,6 +539,19 @@ def compute_metrics(df, mapping):
         metrics["bug_subtask_count"] = metrics["defect_count"]
         metrics["bug_subtask_open"]  = metrics["defect_open"]
 
+    # ── Mid-sprint additions (přidané po startu sprintu = ⭐ v Jira) ──
+    sprint_start_col_ms = mapping.get("sprint_start")
+    created_col_ms      = mapping.get("created")
+    if sprint_start_col_ms and created_col_ms and sprint_start_col_ms in issues.columns:
+        s_start_ms = parse_date(issues[sprint_start_col_ms].dropna().iloc[0]) if not issues[sprint_start_col_ms].dropna().empty else None
+        if s_start_ms:
+            issues["_created_dt"] = issues[created_col_ms].apply(parse_date)
+            mid = issues[issues["_created_dt"].apply(
+                lambda d: d is not None and d > s_start_ms
+            )]
+            metrics["mid_sprint_count"] = len(mid)
+            metrics["mid_sprint_ids"]   = mid[id_col].astype(str).tolist()
+
     # Flow efficiency — cap časy na délku sprintu (issues staré před sprintem mají obří time_in_todo_h)
     sprint_start_col = mapping.get("sprint_start")
     sprint_end_col   = mapping.get("sprint_end")
@@ -1671,11 +1684,14 @@ if metrics.get("spillover_count", 0) > 0:
     )
 
     if not spill_issues.empty:
+        mid_sprint_ids = metrics.get("mid_sprint_ids", [])
         show_cols = {id_col: "Issue"}
         if type_col   and type_col   in spill_issues.columns: show_cols[type_col]   = "Typ"
         if sp_col     and sp_col     in spill_issues.columns: show_cols[sp_col]     = "SP"
         if status_col and status_col in spill_issues.columns: show_cols[status_col] = "Stav"
         d = spill_issues[list(show_cols.keys())].rename(columns=show_cols).fillna("—").astype(str)
+        # ⭐ Označení mid-sprint issues
+        d["Mid-sprint"] = d["Issue"].apply(lambda x: "⭐" if x in mid_sprint_ids else "")
         st.markdown(htable(d, spillover_ids=spill_issues[id_col].astype(str).tolist()),
                     unsafe_allow_html=True)
         total_spill_sp = (
@@ -1683,8 +1699,34 @@ if metrics.get("spillover_count", 0) > 0:
             if sp_col else 0)
         st.markdown(
             f"<div style='font-size:.74rem;color:#a39e96;margin-top:.55rem;"
-            f"font-family:DM Mono,monospace;'>Celkem {int(total_spill_sp)} SP přešlo dál</div>",
+            f"font-family:DM Mono,monospace;'>Celkem {int(total_spill_sp)} SP přešlo dál"
+            + (" &nbsp;·&nbsp; ⭐ = přidáno po startu sprintu" if any(d["Mid-sprint"] == "⭐") else "")
+            + "</div>",
             unsafe_allow_html=True)
+
+# ── Mid-sprint přidané issues ──
+mid_count = metrics.get("mid_sprint_count", 0)
+if mid_count > 0:
+    mid_ids = metrics.get("mid_sprint_ids", [])
+    mid_issues_df = issues_df[issues_df[id_col].astype(str).isin(mid_ids)]
+    section("⭐", f"Přidáno mid-sprint — {mid_count} {'issue' if mid_count == 1 else 'issues'} přidáno po startu sprintu")
+    st.markdown("""<div style="background:#fffbf0;border:1px solid #f0d090;border-radius:11px;
+padding:.75rem 1rem;margin-bottom:.8rem;font-size:.82rem;color:#7a5c00;">
+⭐ Issues přidané po zahájení sprintu — jako hvězdička v Jira sprint reportu.
+Signalizují neplánovanou práci nebo rozšiřování scope v průběhu sprintu.
+</div>""", unsafe_allow_html=True)
+    if not mid_issues_df.empty:
+        show_mid = {id_col: "Issue"}
+        if type_col and type_col in mid_issues_df.columns: show_mid[type_col] = "Typ"
+        if sp_col and sp_col in mid_issues_df.columns: show_mid[sp_col] = "SP"
+        if status_col and status_col in mid_issues_df.columns: show_mid[status_col] = "Stav"
+        created_col = mapping.get("created")
+        if created_col and created_col in mid_issues_df.columns:
+            show_mid[created_col] = "Přidáno"
+        dm = mid_issues_df[list(show_mid.keys())].rename(columns=show_mid).fillna("—").astype(str)
+        if "Přidáno" in dm.columns:
+            dm["Přidáno"] = dm["Přidáno"].apply(lambda x: x[:10] if len(x) >= 10 else x)
+        st.markdown(htable(dm), unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────
