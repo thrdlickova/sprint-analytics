@@ -653,10 +653,14 @@ def draw_burndown(issues_df, mapping, sprint_start, sprint_end):
         main = issues_df[~issues_df[type_col].astype(str).str.lower().str.contains("subtask|sub-task")]
 
     total_sp = pd.to_numeric(main[sp_col], errors="coerce").fillna(0).sum()
+    if total_sp == 0:
+        return None, None
+
     days     = (sprint_end - sprint_start).days + 1
     dates    = [sprint_start + timedelta(days=i) for i in range(days)]
     ideal    = [total_sp - (total_sp / (days - 1)) * i for i in range(days)]
 
+    done_kw_burn = ["done", "closed", "resolved", "to release", "to merge"]
     actual = []
     for d in dates:
         done_sp = 0
@@ -666,7 +670,7 @@ def draw_burndown(issues_df, mapping, sprint_start, sprint_end):
             status   = str(row.get(status_col, "")).lower() if status_col else ""
             if resolved and resolved.date() <= d.date():
                 done_sp += sp
-            elif not resolved and any(kw in status for kw in ["done","closed","resolved"]):
+            elif not resolved and any(kw in status for kw in done_kw_burn):
                 done_sp += sp
         actual.append(max(total_sp - done_sp, 0))
 
