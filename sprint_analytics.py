@@ -445,6 +445,8 @@ def detect_columns(cols):
         "parent_issue":         ["parent_issue"],
         "timespent":            ["timespent_h", "timespent"],
         "total_timespent":      ["total_timespent_h", "total_timespent"],
+        "sprint_added":         ["sprint_added_date", "sprint_added"],
+        "mid_sprint":           ["mid_sprint"],
     }
     mapping = {}
     for field, keywords in cands.items():
@@ -505,11 +507,15 @@ def compute_metrics(df, mapping):
     type_col = mapping.get("type")
 
     # Velocity
+    # POZN: Agile velocity = DODANÉ SP (ne committed). Předtím se omylem počítaly všechny SP non-subtask
+    # itemů (committed), což zkreslovalo trend přes sprinty. Navíc oddělujeme Story vs Bug, protože
+    # míchání feature-práce s opravami chyb dělá velocity nečitelnou pro plánování budoucího sprintu.
     if "story_points" in mapping:
         issues["_sp"] = pd.to_numeric(issues[mapping["story_points"]], errors="coerce").fillna(0)
         main = (issues[~issues[type_col].astype(str).str.lower().str.contains("subtask|sub-task")]
                 if type_col else issues)
-        metrics["velocity"] = int(main["_sp"].sum())
+        # Story/Bug masky se počítají později (až máme _done sloupec) přímo nad issues —
+        # vyhneme se tak nezarovnaným indexům po filtru.
 
     # Done / spillover
     if "status" in mapping:
@@ -528,52 +534,207 @@ def compute_metrics(df, mapping):
             done_sp  = issues.loc[issues["_done"], "_sp"].sum()
             total_sp = issues["_sp"].sum()
             metrics["commit_done_ratio"] = round(done_sp / total_sp * 100, 1) if total_sp > 0 else 0
+            metrics["planned_sp"]   = float(round(total_sp, 1))
+            metrics["delivered_sp"] = float(round(done_sp, 1))
+            metrics["delivery_rate"] = round(done_sp / total_sp * 100, 1) if total_sp > 0 else 0
+
+            # ── Velocity rozdělená Story vs Bug (Fix #2) ──
+            # Postavíme main_done nově (vč. _done) přímo z issues, abychom se vyhnuli
+            # problémům s nezarovnaným indexem po merge a boolean-mask aplikovaným
+            # mezi DataFramy s odlišným indexem.
+            if type_col:
+                non_subtask = ~issues[type_col].astype(str).str.lower().str.contains("subtask|sub-task")
+                main_full = issues[non_subtask].copy()
+                t_full    = main_full[type_col].astype(str).str.lower()
+                story_m   = (t_full == "story")
+                bug_m     = (t_full == "bug")
+            else:
+                main_full = issues.copy()
+                story_m   = pd.Series([True] * len(main_full), index=main_full.index)
+                bug_m     = pd.Series([False] * len(main_full), index=main_full.index)
+
+            done_m = main_full["_done"].fillna(False).astype(bool)
+
+            stories_planned   = float(main_full.loc[story_m, "_sp"].sum())
+            bugs_planned      = float(main_full.loc[bug_m, "_sp"].sum())
+            stories_delivered = float(main_full.loc[story_m & done_m, "_sp"].sum())
+            bugs_delivered    = float(main_full.loc[bug_m   & done_m, "_sp"].sum())
+
+            # Velocity = DODANÉ Story SP (klasický agilní výklad)
+            metrics["velocity"]            = int(round(stories_delivered))
+            metrics["velocity_stories"]    = round(stories_delivered, 1)
+            metrics["velocity_total"]      = int(round(stories_delivered + bugs_delivered))
+            metrics["stories_planned"]     = round(stories_planned, 1)
+            metrics["bug_capacity"]        = round(bugs_delivered, 1)   # dodaná kapacita na bugy
+            metrics["bug_capacity_planned"] = round(bugs_planned, 1)
+            # Procento Bug-času z celkového delivered SP — ukazatel, kolik kapacity sežere údržba
+            total_main_delivered = stories_delivered + bugs_delivered
+            metrics["bug_share_pct"] = (
+                round(bugs_delivered / total_main_delivered * 100, 1)
+                if total_main_delivered > 0 else 0
+            )
+
+    # Fallback: pokud chybí status mapping, velocity stejně potřebujeme nastavit (committed SP)
+    if "story_points" in mapping and "velocity" not in metrics:
+        metrics["velocity"] = int(main["_sp"].sum())
 
     # Cycle time
-    if "created" in mapping and "resolved" in mapping:
-        issues["_cr"] = issues[mapping["created"]].apply(parse_date)
+    # POZN: Tickety přicházejí ze starého backlogu (mohou být měsíce staré),
+    # takže created→resolved měří hlavně dobu v backlogu, ne práci ve sprintu.
+    # Správný výpočet: sprint_added_date (nebo sprint_start) → resolved.
+    if "resolved" in mapping:
         issues["_rs"] = issues[mapping["resolved"]].apply(parse_date)
+        # Začátek měření = kdy se issue dostala do sprintu
+        added_col   = mapping.get("sprint_added")
+        start_col   = mapping.get("sprint_start")
+        created_col = mapping.get("created")
+
+        def _cycle_start(row):
+            # 1) preferuj sprint_added_date pokud existuje
+            if added_col and pd.notna(row.get(added_col)):
+                d = parse_date(row.get(added_col))
+                if d:
+                    return d
+            # 2) fallback na sprint_start (issue byla v sprintu od začátku)
+            if start_col and pd.notna(row.get(start_col)):
+                d = parse_date(row.get(start_col))
+                if d:
+                    return d
+            # 3) poslední fallback — created (původní chování)
+            if created_col and pd.notna(row.get(created_col)):
+                return parse_date(row.get(created_col))
+            return None
+
+        issues["_cs"] = issues.apply(_cycle_start, axis=1)
         issues["_cy"] = issues.apply(
-            lambda r: (r["_rs"] - r["_cr"]).days
-            if r["_cr"] and r["_rs"] and r["_rs"] > r["_cr"] else None, axis=1)
+            lambda r: (r["_rs"] - r["_cs"]).days
+            if r["_cs"] and r["_rs"] and r["_rs"] > r["_cs"] else None, axis=1)
         valid = issues["_cy"].dropna()
         metrics["avg_cycle_time"] = round(valid.mean(), 1) if len(valid) > 0 else None
+        # Necháme i původní výpočet jako "lead_time" pro porovnání (čas v Jiře celkem)
+        if created_col:
+            issues["_cr_full"] = issues[created_col].apply(parse_date)
+            issues["_lt"] = issues.apply(
+                lambda r: (r["_rs"] - r["_cr_full"]).days
+                if r.get("_cr_full") and r["_rs"] and r["_rs"] > r["_cr_full"] else None, axis=1)
+            lt_valid = issues["_lt"].dropna()
+            metrics["avg_lead_time"] = round(lt_valid.mean(), 1) if len(lt_valid) > 0 else None
 
-    # Předávání issues
+    # Předávání issues / handovers (Fix #5)
+    # POZN: Jira assignee_change_count zahrnuje i FIRST assignment (None → Někdo).
+    # Skutečný re-assignment (= předání mezi lidmi) je až change_count >= 2.
+    # Navíc se hlavní metrika počítá pouze z top-level Story/Bug — subtasky často vznikají
+    # bez assignee a teprve později se přiřazují, což zkresluje "ve sprintu se hodně předávalo".
     if "assignee_change_count" in mapping:
         issues["_ch"] = pd.to_numeric(issues[mapping["assignee_change_count"]], errors="coerce").fillna(0)
-        metrics["issues_with_handoff"] = int((issues["_ch"] > 0).sum())
 
-    # Chybovost nových features (Bug Subtasky = chyby nalezené při testování stories)
-    if type_col and "parent_issue" in mapping:
-        subtasks = issues[issues[type_col].astype(str).str.lower().str.contains("subtask|sub-task")]
-        stories  = issues[issues[type_col].astype(str).str.lower() == "story"]
-        metrics["defect_count"] = len(subtasks)
-        done_kw_set = ["done","closed","to release","to merge"]
-        metrics["defect_open"]  = (
-            int((~subtasks[mapping["status"]].astype(str).str.lower().isin(done_kw_set)).sum())
-            if "status" in mapping else 0)
-        # Defect rate = bugy / všechna main issues × 100
-        main_i = issues[~issues[type_col].astype(str).str.lower().str.contains("subtask|sub-task")]
-        bugs_only = main_i[main_i[type_col].astype(str).str.lower().str.contains("^bug$", regex=True)]
+        # Skutečné re-assignments (≥ 2 = aspoň jedno reálné předání po prvním assignu)
+        real_handoff_mask = issues["_ch"] >= 2
+
+        if type_col:
+            top_level_mask_h = issues[type_col].astype(str).str.lower().isin(["story", "bug"])
+        else:
+            top_level_mask_h = pd.Series([True] * len(issues), index=issues.index)
+
+        # Hlavní metrika — top-level Story/Bug s reálnými re-assigns
+        top_handoff       = int((real_handoff_mask & top_level_mask_h).sum())
+        top_total         = int(top_level_mask_h.sum())
+        metrics["issues_with_handoff"]      = top_handoff
+        metrics["top_level_total"]          = top_total
+        metrics["handoff_rate_pct"]         = (
+            round(top_handoff / top_total * 100, 1) if top_total > 0 else 0
+        )
+
+        # Sekundární informace pro úplnost
+        metrics["issues_with_any_change"]   = int((issues["_ch"] > 0).sum())   # vč. first assign
+        metrics["issues_with_handoff_all"]  = int(real_handoff_mask.sum())     # vč. subtasků
+
+    # Chybovost nových features (Fix #3)
+    # POZN: Defect Rate = BugSubtasky / Story × 100. Měří kvalitu nových features:
+    # kolik chyb tester našel při testování čerstvě vyvinuté Story. Standalone Bug
+    # je něco jiného (chyba z produkce/staršího sprintu) — zobrazí se v separátním panelu.
+    if type_col:
+        t_lower_all = issues[type_col].astype(str).str.lower()
+        # BugSubtask = chyby z testování stories. Plus tolerance: "bugsubtask", "bug subtask", "bug-subtask"
+        bug_subtask_mask = t_lower_all.str.contains(r"bug.?subtask", regex=True)
+        story_mask_all   = (t_lower_all == "story")
+        # Standalone Bug — výhradně typ "bug" (ne sub-task, ne BugSubtask)
+        standalone_bug_mask = (t_lower_all == "bug")
+
+        bug_subtasks = issues[bug_subtask_mask]
+        stories      = issues[story_mask_all]
+
+        defect_count   = int(bug_subtask_mask.sum())
+        story_count    = int(story_mask_all.sum())
+        standalone_bug = int(standalone_bug_mask.sum())
+
+        metrics["defect_count"]    = defect_count
+        metrics["story_count"]     = story_count
+        metrics["standalone_bug_count"] = standalone_bug
+
+        done_kw_set = ["done","closed","resolved","to release","to merge"]
+        if "status" in mapping:
+            metrics["defect_open"] = int(
+                (~bug_subtasks[mapping["status"]].astype(str).str.lower().isin(done_kw_set)).sum()
+            )
+            metrics["standalone_bug_open"] = int(
+                (~issues.loc[standalone_bug_mask, mapping["status"]]
+                 .astype(str).str.lower().isin(done_kw_set)).sum()
+            )
+        else:
+            metrics["defect_open"] = 0
+            metrics["standalone_bug_open"] = 0
+
+        # Defect Rate = BugSubtask / Story × 100  (= "bugy z testování na 1 story")
+        # Pod 100 % = méně než 1 chyba/story. Nad 100 % = víc bugů než stories.
         metrics["defect_rate"] = (
-            round(len(bugs_only) / len(main_i) * 100, 1) if len(main_i) > 0 else 0)
-        # Zpětná kompatibilita
-        metrics["bug_subtask_count"] = metrics["defect_count"]
+            round(defect_count / story_count * 100, 1) if story_count > 0 else 0
+        )
+        # Zpětná kompatibilita pro starý kód, který četl bug_subtask_*
+        metrics["bug_subtask_count"] = defect_count
         metrics["bug_subtask_open"]  = metrics["defect_open"]
 
-    # ── Mid-sprint additions (přidané po startu sprintu = ⭐ v Jira) ──
+    # ── Mid-sprint additions / scope creep (Fix #4) ──
+    # POZN: Subtasky/BugSubtasky vznikají v průběhu sprintu přirozeně (testeři, dekompozice),
+    # takže jejich přidání NENÍ scope creep. Skutečný scope creep = top-level Story / Bug,
+    # které do sprintu přibyly až po startu. Pro úplnost si necháváme i hrubé "all"
+    # (vč. subtasků) jako sekundární informaci.
     sprint_start_col_ms = mapping.get("sprint_start")
     created_col_ms      = mapping.get("created")
     if sprint_start_col_ms and created_col_ms and sprint_start_col_ms in issues.columns:
         s_start_ms = parse_date(issues[sprint_start_col_ms].dropna().iloc[0]) if not issues[sprint_start_col_ms].dropna().empty else None
         if s_start_ms:
             issues["_created_dt"] = issues[created_col_ms].apply(parse_date)
-            mid = issues[issues["_created_dt"].apply(
+            mid_all = issues[issues["_created_dt"].apply(
                 lambda d: d is not None and d > s_start_ms
             )]
-            metrics["mid_sprint_count"] = len(mid)
-            metrics["mid_sprint_ids"]   = mid[id_col].astype(str).tolist()
+
+            # Filtr na top-level Story / Bug (bez subtasků)
+            if type_col:
+                t_low_mid = mid_all[type_col].astype(str).str.lower()
+                top_level_mask = t_low_mid.isin(["story", "bug"])
+                mid_top = mid_all[top_level_mask]
+            else:
+                mid_top = mid_all  # bez type sloupce nelze rozlišit
+
+            # Hlavní (po fixu) metrika scope creepu = jen Story+Bug
+            metrics["mid_sprint_count"]      = len(mid_top)
+            metrics["mid_sprint_ids"]        = mid_top[id_col].astype(str).tolist()
+            # Sekundární — všechno přidané (vč. přirozeně vzniklých subtasků)
+            metrics["mid_sprint_all_count"]  = len(mid_all)
+            metrics["mid_sprint_all_ids"]    = mid_all[id_col].astype(str).tolist()
+
+            # Scope creep procentuálně z top-level work
+            if type_col:
+                top_level_total = int(
+                    issues[type_col].astype(str).str.lower().isin(["story", "bug"]).sum()
+                )
+            else:
+                top_level_total = len(issues)
+            metrics["scope_creep_pct"] = (
+                round(len(mid_top) / top_level_total * 100, 1)
+                if top_level_total > 0 else 0
+            )
 
     # Flow efficiency — cap časy na délku sprintu (issues staré před sprintem mají obří time_in_todo_h)
     sprint_start_col = mapping.get("sprint_start")
@@ -638,9 +799,18 @@ def compute_health_score(metrics, outlier_ids):
         score -= p
         breakdown.append({"oblast": "Otevřené chyby features", "body": -p, "label": f"{bs_open} ks"})
 
+    # Defect Rate (BugSubtask/Story × 100). Pod 100 % je zdravé (méně než 1 chyba/story).
+    # Postupná penalizace: 100–200 % drobně, 200–300 % víc, nad 300 % vysoké riziko kvality.
     dr = metrics.get("defect_rate", 0)
-    if dr > 200:
+    if dr > 300:
+        p = 15
+    elif dr > 200:
         p = 10
+    elif dr > 100:
+        p = 5
+    else:
+        p = 0
+    if p > 0:
         score -= p
         breakdown.append({"oblast": "Defect Rate", "body": -p, "label": f"{dr:.0f}%"})
 
@@ -1091,8 +1261,8 @@ def agile_expert_analysis(metrics, outlier_ids, health_score, sprint_goal, goal_
     cd  = metrics.get("commit_done_ratio", 100)
     dr  = metrics.get("defect_rate", 0)
     bs_open     = metrics.get("defect_open", 0)
-    handoff_pct = round(
-        metrics.get("issues_with_handoff", 0) / max(metrics.get("total_count", 1), 1) * 100)
+    # Po Fix #5: handoff_rate_pct počítáme z top-level Story/Bug a jen reálné re-assigns.
+    handoff_pct = int(metrics.get("handoff_rate_pct", 0))
 
     observations = []
     actions      = []
@@ -1243,9 +1413,21 @@ def agile_expert_analysis(metrics, outlier_ids, health_score, sprint_goal, goal_
         else "Bez sprint goal nevíš zda sprint uspěl.",
         None if sprint_goal else "Zadej sprint goal před začátkem každého sprintu."))
 
+    vel_s = metrics.get('velocity_stories', metrics.get('velocity', '?'))
     stat_review.append(sri(
-        "Velocity", f"{metrics.get('velocity','?')} SP", "ok",
-        "Sleduj jako trend — jeden sprint nic neříká. Srovnávej přes 3–6 sprintů."))
+        "Velocity (Stories)", f"{vel_s} SP", "ok",
+        "Dodané Story SP — klasická velocity bez Bugů. Sleduj trend 3–6 sprintů."))
+
+    bug_c   = metrics.get('bug_capacity', 0)
+    bug_pct = metrics.get('bug_share_pct', 0)
+    bug_status = ("ok" if bug_pct <= 20 else
+                  "warn" if bug_pct <= 35 else
+                  "bad")
+    stat_review.append(sri(
+        "Bug Capacity", f"{bug_c} SP ({bug_pct} %)", bug_status,
+        ("Bugy spotřebovávají rozumný díl kapacity." if bug_status == "ok"
+         else "Vysoký podíl kapacity jde na opravy chyb — méně prostoru na features. "
+              "Zvažte prevenci: code review, testovací pokrytí, definition of done.")))
 
     ct_s = ("ok" if ct and ct <= 5 else
             "warn" if ct and ct <= 8 else
@@ -1293,11 +1475,28 @@ def agile_expert_analysis(metrics, outlier_ids, health_score, sprint_goal, goal_
         "Estimation Accuracy", "dle grafu níže", "ok",
         "Srovnáváme vykázaný čas s průměrem pro dané SP. Outliéři jsou zvýrazněni."))
 
-    if "issues_with_handoff" not in mapping:
+    # Předávání issues — koukáme do metrics (ne mapping), protože tam jsme spočítali rate.
+    if "assignee_change_count" not in mapping:
         stat_review.append(sri(
             "Předávání issues", "chybí data", "missing",
             "Nelze sledovat bez assignee_change_count.",
             "Přidej sloupec assignee_change_count do exportu."))
+    else:
+        h_count = metrics.get("issues_with_handoff", 0)
+        h_total = metrics.get("top_level_total", 0)
+        h_pct   = metrics.get("handoff_rate_pct", 0)
+        h_status = ("ok"   if h_pct <= 15 else
+                    "warn" if h_pct <= 30 else
+                    "bad")
+        stat_review.append(sri(
+            "Předávání issues",
+            f"{h_count} z {h_total} top-level ({h_pct} %)",
+            h_status,
+            ("Měříme reálné re-assigny (≥ 2 změny řešitele) jen u Story/Bug. "
+             "First-assignment None→Někdo se nepočítá. Pod 15 % je zdravé."),
+            ("Vysoký podíl předávání u top-level práce — prodlužuje cycle time. "
+             "Hledejte příčiny: nejasné ownership v plánování, blokátory, kapacita."
+             if h_status != "ok" else None)))
 
     return observations, actions, stat_review
 
@@ -1604,21 +1803,37 @@ elif not sprint_goal:
 # ─────────────────────────────────────────────
 
 st.markdown('<div id="health-score"></div>', unsafe_allow_html=True)
-section("🏆", "Sprint Health Score")
+section("🏆", "Plán vs Dodáno")
 
+# ── Hlavní metrika: Delivery rate (planned vs delivered SP) ──
+planned_sp   = metrics.get("planned_sp", 0)
+delivered_sp = metrics.get("delivered_sp", 0)
+delivery_rate = metrics.get("delivery_rate", 0)
+
+# Barva podle splnění (cíl ≥ 80%)
+if delivery_rate >= 90:
+    dr_color = "#4a8040"; dr_label = "Výborné dodání"
+elif delivery_rate >= 80:
+    dr_color = "#7a8040"; dr_label = "Solidní dodání"
+elif delivery_rate >= 60:
+    dr_color = "#9a6a20"; dr_label = "Část plánu nedodána"
+else:
+    dr_color = "#9a3020"; dr_label = "Plán dodán z menší části"
+
+undelivered_sp = max(planned_sp - delivered_sp, 0)
+
+# Sekundární kvalitativní skóre — původní kompozit, přejmenovaný
 health_score, breakdown = compute_health_score(metrics, outlier_ids)
-
-# Teplá paleta Health Score
 hs_color  = "#9a4a2a" if health_score >= 80 else ("#9a6a20" if health_score >= 60 else "#9a3020")
-hs_label  = ("Výborný sprint" if health_score >= 80
-             else ("Dobrý sprint s rezervami" if health_score >= 60
-                   else "Sprint potřebuje zlepšení"))
+hs_label  = ("Výborně" if health_score >= 80
+             else ("Dobré s rezervami" if health_score >= 60
+                   else "Vyžaduje zlepšení"))
 
 # Teplé barvy karet: špatné=lososová, dobré=sage, varování=amber
 def card_colors(body):
-    if body < -10:  # špatné
+    if body < -10:
         return "#fff0eb", "#e8a898", "#c05040"
-    elif body < 0:  # varování
+    elif body < 0:
         return "#fffbf0", "#e0c880", "#9a6a20"
     else:
         return "#f0f5ee", "#a8c8a0", "#4a8040"
@@ -1629,11 +1844,11 @@ for b in breakdown:
     ps = str(b["body"]) if b["body"] != 0 else "±0"
     breakdown_html += (
         f'<div style="background:{bb};border:1.5px solid {bbd};border-radius:10px;'
-        f'padding:.7rem 1rem;text-align:center;flex:1;min-width:160px;max-width:200px;">'
-        f'<div style="font-size:1.6rem;font-weight:700;color:{btxt};line-height:1;'
+        f'padding:.6rem .9rem;text-align:center;flex:1;min-width:140px;max-width:180px;">'
+        f'<div style="font-size:1.4rem;font-weight:700;color:{btxt};line-height:1;'
         f'font-family:\'DM Serif Display\',serif;">{ps}</div>'
-        f'<div style="font-size:.82rem;font-weight:600;color:#2c2922;margin-top:.2rem;">{b["oblast"]}</div>'
-        f'<div style="font-size:.72rem;color:#6b6359;">{b["label"]}</div></div>'
+        f'<div style="font-size:.78rem;font-weight:600;color:#2c2922;margin-top:.2rem;">{b["oblast"]}</div>'
+        f'<div style="font-size:.7rem;color:#6b6359;">{b["label"]}</div></div>'
     )
 if not breakdown_html:
     breakdown_html = "<div style='font-size:.84rem;color:#4a8040;padding:.5rem;'>✓ Žádné penalizace!</div>"
@@ -1641,22 +1856,62 @@ if not breakdown_html:
 st.markdown(f"""
 <div style="background:#fffef9;border:1.5px solid #e8e3d8;border-radius:18px;
             padding:1.7rem 2.2rem;display:flex;flex-direction:column;
-            align-items:center;gap:1.2rem;box-shadow:2px 3px 0 #e0dbd2;">
+            align-items:center;gap:1.4rem;box-shadow:2px 3px 0 #e0dbd2;">
+
+  <!-- Hlavní metrika: Plán vs Dodáno -->
   <div style="text-align:center;">
     <div style="font-size:.64rem;font-family:'DM Mono',monospace;color:#a39e96;
                 text-transform:uppercase;letter-spacing:.1em;margin-bottom:.3rem;">
-      Health Score
+      Dodáno z plánu
     </div>
-    <div style="font-size:4.5rem;font-weight:400;color:{hs_color};line-height:1;
-                font-family:'DM Serif Display',serif;">{health_score}</div>
-    <div style="font-size:.8rem;color:#a39e96;font-family:'DM Mono',monospace;">/100</div>
-    <div style="font-size:.84rem;font-weight:500;color:{hs_color};margin-top:.4rem;">
-      {hs_label}
+    <div style="font-size:4.5rem;font-weight:400;color:{dr_color};line-height:1;
+                font-family:'DM Serif Display',serif;">{delivery_rate:.1f}%</div>
+    <div style="font-size:.84rem;font-weight:500;color:{dr_color};margin-top:.4rem;">
+      {dr_label}
     </div>
-    <div style="font-size:.68rem;color:#a39e96;margin-top:.2rem;">orientační skóre</div>
   </div>
-  <div style="display:flex;flex-wrap:wrap;justify-content:center;gap:8px;width:100%;">
-    {breakdown_html}
+
+  <!-- SP rozpad -->
+  <div style="display:flex;gap:1.6rem;flex-wrap:wrap;justify-content:center;width:100%;
+              padding-top:1rem;border-top:1px dashed #e8e3d8;">
+    <div style="text-align:center;min-width:120px;">
+      <div style="font-size:.64rem;font-family:'DM Mono',monospace;color:#a39e96;
+                  text-transform:uppercase;letter-spacing:.08em;">Naplánováno</div>
+      <div style="font-size:1.8rem;font-weight:500;color:#2c2922;
+                  font-family:'DM Serif Display',serif;">{planned_sp:g} SP</div>
+    </div>
+    <div style="text-align:center;min-width:120px;">
+      <div style="font-size:.64rem;font-family:'DM Mono',monospace;color:#a39e96;
+                  text-transform:uppercase;letter-spacing:.08em;">Dodáno</div>
+      <div style="font-size:1.8rem;font-weight:500;color:#4a8040;
+                  font-family:'DM Serif Display',serif;">{delivered_sp:g} SP</div>
+    </div>
+    <div style="text-align:center;min-width:120px;">
+      <div style="font-size:.64rem;font-family:'DM Mono',monospace;color:#a39e96;
+                  text-transform:uppercase;letter-spacing:.08em;">Nedokončeno</div>
+      <div style="font-size:1.8rem;font-weight:500;color:#9a6a20;
+                  font-family:'DM Serif Display',serif;">{undelivered_sp:g} SP</div>
+    </div>
+  </div>
+
+  <!-- Sekundární: kvalitativní indikátory procesu -->
+  <div style="width:100%;padding-top:1rem;border-top:1px dashed #e8e3d8;">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;
+                margin-bottom:.7rem;flex-wrap:wrap;gap:.4rem;">
+      <div style="font-size:.7rem;font-family:'DM Mono',monospace;color:#a39e96;
+                  text-transform:uppercase;letter-spacing:.1em;">
+        Kvalitativní indikátory procesu
+      </div>
+      <div style="font-size:.78rem;color:{hs_color};font-weight:500;">
+        {health_score}/100 · {hs_label}
+      </div>
+    </div>
+    <div style="display:flex;flex-wrap:wrap;justify-content:center;gap:8px;">
+      {breakdown_html}
+    </div>
+    <div style="font-size:.68rem;color:#a39e96;margin-top:.7rem;text-align:center;">
+      Penalizace za cycle time, spillover, flow efficiency, outliery, otevřené chyby a defect rate.
+    </div>
   </div>
 </div>
 """, unsafe_allow_html=True)
@@ -1668,23 +1923,84 @@ ct_val = metrics.get("avg_cycle_time")
 fe_val = metrics.get("flow_efficiency")
 cd_val = metrics.get("commit_done_ratio")
 dr_val = metrics.get("defect_rate")
+vel_stories = metrics.get("velocity_stories", metrics.get("velocity", 0))
+bug_cap     = metrics.get("bug_capacity", 0)
+bug_share   = metrics.get("bug_share_pct", 0)
+defect_count = metrics.get("defect_count", 0)
+story_count  = metrics.get("story_count", 0)
+standalone_bug_count = metrics.get("standalone_bug_count", 0)
+standalone_bug_open  = metrics.get("standalone_bug_open", 0)
 
-c1, c2, c3, c4, c5 = st.columns(5)
+c1, c2, c3, c4, c5, c6 = st.columns(6)
 with c1:
-    st.metric("Velocity", f"{metrics.get('velocity','—')} SP",
-              help="Story points dokončené v tomto sprintu. Sleduj jako trend přes 3–6 sprintů.")
+    st.metric(
+        "Velocity (Stories)",
+        f"{vel_stories:g} SP",
+        help=("Dodané Story SP (klasická agilní velocity). "
+              "Bugy jsou samostatně, aby trend pro plánování dalších sprintů "
+              "neovlivňovaly opravy chyb. Sleduj 3–6 sprintů."),
+    )
 with c2:
+    st.metric(
+        "Bug Capacity",
+        f"{bug_cap:g} SP",
+        delta=f"{bug_share:g} % z celku" if bug_share else None,
+        delta_color="off",
+        help=("Dodané SP na opravách Bugů. Vysoký podíl = velký technický dluh "
+              "a méně kapacity na nové features. Zdravé: pod ~20 % z celkové práce."),
+    )
+with c3:
     st.metric("Avg. Cycle Time", f"{ct_val} dní" if ct_val else "—",
               help="Průměrný čas od vytvoření po dokončení. Cíl: pod 5 dní (DORA).")
-with c3:
+with c4:
     st.metric("Spillover", f"{sr_val}%",
               help="Nedokončené issues přecházející dál. Zdravé: pod 10%.")
-with c4:
+with c5:
     st.metric("Flow Efficiency", f"{fe_val}%" if fe_val else "—",
               help="Podíl aktivní práce vs. čekání. Cíl: 40–65%.")
-with c5:
-    st.metric("Defect Rate", f"{dr_val:.0f}%" if dr_val else "—",
-              help="Chybovost nových features: chyby z testování / počet stories × 100. Pod 100% = zdravé.")
+with c6:
+    # Defect Rate = BugSubtask / Story × 100. Pod 100 % = méně než 1 chyba/story.
+    st.metric(
+        "Defect Rate",
+        f"{dr_val:.0f}%" if dr_val is not None else "—",
+        delta=f"{defect_count} BugSubtask / {story_count} Story" if story_count else None,
+        delta_color="off",
+        help=("Kvalita nových features: BugSubtasky (chyby nalezené testery při testování "
+              "Stories) / počet Stories × 100. Pod 100 % = méně než 1 chyba na story (zdravé). "
+              "Nad 200 % = vysoké riziko kvality, přehodnoť Definition of Done a coverage."),
+    )
+
+# ── Standalone Bugy: separátní informativní panel ──
+if standalone_bug_count > 0:
+    bug_color = "#9a3020" if standalone_bug_open >= 5 else ("#9a6a20" if standalone_bug_open > 0 else "#4a8040")
+    bug_status = ("Vyžaduje pozornost" if standalone_bug_open >= 5
+                  else ("Pár otevřených" if standalone_bug_open > 0
+                        else "Vše vyřešeno"))
+    st.markdown(f"""
+    <div style="margin-top:1rem;background:#fff8f4;border:1.5px solid #e8d4c8;
+                border-radius:12px;padding:.9rem 1.2rem;display:flex;
+                justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.6rem;">
+      <div>
+        <div style="font-size:.7rem;font-family:'DM Mono',monospace;color:#a39e96;
+                    text-transform:uppercase;letter-spacing:.1em;">
+          Standalone Bugy ve sprintu
+        </div>
+        <div style="font-size:.84rem;color:#5c5449;margin-top:.2rem;">
+          Bugy nejsou subtasky stories — typicky chyby z produkce nebo dřívějších sprintů.
+          Měřeno odděleně, aby nezkreslovaly Defect Rate kvality nových features.
+        </div>
+      </div>
+      <div style="text-align:right;">
+        <div style="font-size:1.6rem;font-family:'DM Serif Display',serif;color:#2c2922;
+                    font-weight:500;line-height:1;">
+          {standalone_bug_count}<span style="font-size:.8rem;color:#a39e96;"> celkem</span>
+        </div>
+        <div style="font-size:.78rem;color:{bug_color};margin-top:.2rem;font-weight:500;">
+          {standalone_bug_open} otevřených · {bug_status}
+        </div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────
@@ -1752,16 +2068,26 @@ if metrics.get("spillover_count", 0) > 0:
             + "</div>",
             unsafe_allow_html=True)
 
-# ── Mid-sprint přidané issues ──
+# ── Mid-sprint přidané issues (scope creep — jen Story+Bug, Fix #4) ──
 mid_count = metrics.get("mid_sprint_count", 0)
-if mid_count > 0:
+mid_all_count = metrics.get("mid_sprint_all_count", 0)
+scope_pct = metrics.get("scope_creep_pct", 0)
+if mid_count > 0 or mid_all_count > 0:
     mid_ids = metrics.get("mid_sprint_ids", [])
     mid_issues_df = issues_df[issues_df[id_col].astype(str).isin(mid_ids)]
-    section("⭐", f"Přidáno mid-sprint — {mid_count} {'issue' if mid_count == 1 else 'issues'} přidáno po startu sprintu")
-    st.markdown("""<div style="background:#fffbf0;border:1px solid #f0d090;border-radius:11px;
+    section("⭐", f"Scope creep — {mid_count} top-level {'Story/Bug přidán' if mid_count == 1 else 'Story/Bug přidáno'} po startu sprintu ({scope_pct} %)")
+    subtask_extra = max(mid_all_count - mid_count, 0)
+    extra_note = (
+        f"<br><span style='color:#a39e96;'>+ {subtask_extra} subtask"
+        f"{'y' if subtask_extra != 1 else ''} vznikly v průběhu (přirozená dekompozice — "
+        f"do scope creep se nepočítají).</span>"
+        if subtask_extra > 0 else ""
+    )
+    st.markdown(f"""<div style="background:#fffbf0;border:1px solid #f0d090;border-radius:11px;
 padding:.75rem 1rem;margin-bottom:.8rem;font-size:.82rem;color:#7a5c00;">
-⭐ Issues přidané po zahájení sprintu — jako hvězdička v Jira sprint reportu.
-Signalizují neplánovanou práci nebo rozšiřování scope v průběhu sprintu.
+⭐ Skutečný scope creep — top-level Story/Bug přidané po zahájení sprintu.
+Signalizují neplánovanou práci nebo rozšiřování plánu během sprintu.
+Cíl: pod 10 % top-level work.{extra_note}
 </div>""", unsafe_allow_html=True)
     if not mid_issues_df.empty:
         show_mid = {id_col: "Issue"}
