@@ -10,7 +10,28 @@ import json
 import re
 from datetime import datetime, timedelta
 import io
+import os
 import html as hl
+
+
+# ─────────────────────────────────────────────
+# AUTO-LOAD adapter — emuluje Streamlit UploadedFile pro lokální soubor
+# ─────────────────────────────────────────────
+class _LocalFile:
+    """Emuluje rozhraní Streamlit UploadedFile (.name, .read()) pro CSV ze složky."""
+    def __init__(self, path):
+        self.name = os.path.basename(path)
+        self._path = path
+        self._buf = None
+
+    def read(self):
+        if self._buf is None:
+            with open(self._path, "rb") as f:
+                self._buf = f.read()
+        return self._buf
+
+    def seek(self, *args, **kwargs):
+        return None
 
 st.set_page_config(
     layout="wide",
@@ -680,7 +701,9 @@ def draw_burndown(issues_df, mapping, sprint_start, sprint_end):
     for d in dates:
         done_sp = 0
         for _, row in main.iterrows():
-            sp       = pd.to_numeric(row.get(sp_col, 0), errors="coerce") or 0
+            sp_raw   = pd.to_numeric(row.get(sp_col, 0), errors="coerce")
+            # POZN: NaN je v Pythonu truthy, takže `nan or 0` vrátí nan — proto explicit isna check
+            sp       = 0 if pd.isna(sp_raw) else float(sp_raw)
             resolved = parse_date(row.get(res_col, "")) if res_col else None
             status   = str(row.get(status_col, "")).lower() if status_col else ""
             if resolved and resolved.date() <= d.date():
@@ -752,7 +775,13 @@ def draw_burndown(issues_df, mapping, sprint_start, sprint_end):
     if not actual:
         plt.close(fig)
         return None, None
-    final_pct = round(actual[-1] / total_sp * 100) if total_sp > 0 else 0
+    # Defenzivní pojistka: pokud i přes opravu výše skončí actual[-1] jako NaN,
+    # neshazujeme aplikaci, jen vrátíme 0 %.
+    last_val = actual[-1]
+    if total_sp > 0 and last_val is not None and not pd.isna(last_val):
+        final_pct = round(float(last_val) / total_sp * 100)
+    else:
+        final_pct = 0
     return fig, final_pct
 
 
@@ -1323,6 +1352,20 @@ def generate_retro_topics(metrics, outlier_ids, sprint_goal):
 # ─────────────────────────────────────────────
 if "uploaded_file" not in st.session_state:
     st.session_state["uploaded_file"] = None
+
+# ─── AUTO-LOAD: pokud vedle skriptu leží sprint CSV, načti ho automaticky ───
+if st.session_state["uploaded_file"] is None:
+    _script_dir = os.path.dirname(os.path.abspath(__file__))
+    _candidates = [
+        "sprint_3132_MOB.csv",
+        # případně další defaultní názvy do budoucna
+    ]
+    for _name in _candidates:
+        _path = os.path.join(_script_dir, _name)
+        if os.path.exists(_path):
+            st.session_state["uploaded_file"] = _LocalFile(_path)
+            st.session_state["auto_loaded"] = True
+            break
 
 # ─────────────────────────────────────────────
 # SIDEBAR + UPLOAD
