@@ -1,0 +1,21 @@
+# Citlivé soubory
+.env
+.env.local
+*.token
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Data exporty z Jiry — nepotřebujeme je v repu
+sprint_*.csv
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
