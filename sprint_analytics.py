@@ -1254,9 +1254,8 @@ def draw_flow_state_cards(df, mapping):
 # AGILE EXPERT
 # ─────────────────────────────────────────────
 
-def agile_expert_analysis(metrics, outlier_ids, health_score, sprint_goal, goal_result, mapping):
+def agile_expert_analysis(metrics, outlier_ids, sprint_goal, goal_result, mapping):
     sr  = metrics.get("spillover_rate", 0)
-    ct  = metrics.get("avg_cycle_time")
     fe  = metrics.get("flow_efficiency")
     cd  = metrics.get("commit_done_ratio", 100)
     dr  = metrics.get("defect_rate", 0)
@@ -1311,26 +1310,10 @@ def agile_expert_analysis(metrics, outlier_ids, health_score, sprint_goal, goal_
             "meritko":f"Cíl: spillover pod 15% (aktuálně {sr}%)",
             "kdy":"Ihned"})
 
-    # Cycle time
-    if ct:
-        if ct <= 5:
-            observations.append({"type":"good",
-                "title":f"Cycle time {ct} dní — výborný",
-                "detail":"DORA high performers mají cycle time pod 1 týden. Tým je na tom dobře."})
-        elif ct <= 8:
-            observations.append({"type":"warn",
-                "title":f"Cycle time {ct} dní — nad optimem",
-                "detail":"Doporučená hranice je 5 dní. Hledejte kde se issues zasekávají."})
-            actions.append({"akce":"Na každém standupu: co konkrétně blokuje toto issue?",
-                "meritko":f"Cíl: cycle time pod 6 dní (aktuálně {ct} dní)",
-                "kdy":"Ihned"})
-        else:
-            observations.append({"type":"bad",
-                "title":f"Cycle time {ct} dní — kritický",
-                "detail":"Issues putují procesem déle než sprint trvá. Systémové blokery nebo příliš velké stories."})
-            actions.append({"akce":"Rozdělte 8+ SP stories a zmapujte kde issues stojí nejdéle",
-                "meritko":f"Cíl: pod 6 dní (aktuálně {ct} dní)",
-                "kdy":"Retrospektiva"})
+    # Cycle time / Lead time vědomě nezahrnujeme — backlog je připravený měsíce dopředu,
+    # takže "čas od vytvoření" neměří výkon týmu, ale plánovací horizont PO.
+    # Práce navíc teče přes subtasky (top-level Story zůstává v TODO),
+    # takže cycle time na úrovni Story by stejně nereflektoval realitu.
 
     # Flow efficiency
     if fe:
@@ -1428,15 +1411,6 @@ def agile_expert_analysis(metrics, outlier_ids, health_score, sprint_goal, goal_
         ("Bugy spotřebovávají rozumný díl kapacity." if bug_status == "ok"
          else "Vysoký podíl kapacity jde na opravy chyb — méně prostoru na features. "
               "Zvažte prevenci: code review, testovací pokrytí, definition of done.")))
-
-    ct_s = ("ok" if ct and ct <= 5 else
-            "warn" if ct and ct <= 8 else
-            "bad" if ct else "missing")
-    stat_review.append(sri(
-        "Cycle Time",
-        f"{ct} dní" if ct else "chybí", ct_s,
-        f"DORA hranice: pod 5 dní (aktuálně {ct} dní)." if ct else "Nelze vypočítat.",
-        None if ct else "Přidej sloupce created a resolved do exportu."))
 
     fe_s = ("ok" if fe and fe >= 50 else
             "warn" if fe and fe >= 30 else
@@ -1593,7 +1567,7 @@ with st.sidebar:
 
     nav_items = [
         ("🎯", "Sprint Goal",          "sprint-goal"),
-        ("🏆", "Health Score",         "health-score"),
+        ("🏆", "Plán vs Dodáno",       "health-score"),
         ("📉", "Burndown",             "burndown"),
         ("⚠️", "Nedokončené issues",   "spillover"),
         ("⏱",  "Vykázaný čas",        "cas"),
@@ -1822,37 +1796,6 @@ else:
 
 undelivered_sp = max(planned_sp - delivered_sp, 0)
 
-# Sekundární kvalitativní skóre — původní kompozit, přejmenovaný
-health_score, breakdown = compute_health_score(metrics, outlier_ids)
-hs_color  = "#9a4a2a" if health_score >= 80 else ("#9a6a20" if health_score >= 60 else "#9a3020")
-hs_label  = ("Výborně" if health_score >= 80
-             else ("Dobré s rezervami" if health_score >= 60
-                   else "Vyžaduje zlepšení"))
-
-# Teplé barvy karet: špatné=lososová, dobré=sage, varování=amber
-def card_colors(body):
-    if body < -10:
-        return "#fff0eb", "#e8a898", "#c05040"
-    elif body < 0:
-        return "#fffbf0", "#e0c880", "#9a6a20"
-    else:
-        return "#f0f5ee", "#a8c8a0", "#4a8040"
-
-breakdown_html = ""
-for b in breakdown:
-    bb, bbd, btxt = card_colors(b["body"])
-    ps = str(b["body"]) if b["body"] != 0 else "±0"
-    breakdown_html += (
-        f'<div style="background:{bb};border:1.5px solid {bbd};border-radius:10px;'
-        f'padding:.6rem .9rem;text-align:center;flex:1;min-width:140px;max-width:180px;">'
-        f'<div style="font-size:1.4rem;font-weight:700;color:{btxt};line-height:1;'
-        f'font-family:\'DM Serif Display\',serif;">{ps}</div>'
-        f'<div style="font-size:.78rem;font-weight:600;color:#2c2922;margin-top:.2rem;">{b["oblast"]}</div>'
-        f'<div style="font-size:.7rem;color:#6b6359;">{b["label"]}</div></div>'
-    )
-if not breakdown_html:
-    breakdown_html = "<div style='font-size:.84rem;color:#4a8040;padding:.5rem;'>✓ Žádné penalizace!</div>"
-
 st.markdown(f"""
 <div style="background:#fffef9;border:1.5px solid #e8e3d8;border-radius:18px;
             padding:1.7rem 2.2rem;display:flex;flex-direction:column;
@@ -1893,33 +1836,12 @@ st.markdown(f"""
                   font-family:'DM Serif Display',serif;">{undelivered_sp:g} SP</div>
     </div>
   </div>
-
-  <!-- Sekundární: kvalitativní indikátory procesu -->
-  <div style="width:100%;padding-top:1rem;border-top:1px dashed #e8e3d8;">
-    <div style="display:flex;justify-content:space-between;align-items:baseline;
-                margin-bottom:.7rem;flex-wrap:wrap;gap:.4rem;">
-      <div style="font-size:.7rem;font-family:'DM Mono',monospace;color:#a39e96;
-                  text-transform:uppercase;letter-spacing:.1em;">
-        Kvalitativní indikátory procesu
-      </div>
-      <div style="font-size:.78rem;color:{hs_color};font-weight:500;">
-        {health_score}/100 · {hs_label}
-      </div>
-    </div>
-    <div style="display:flex;flex-wrap:wrap;justify-content:center;gap:8px;">
-      {breakdown_html}
-    </div>
-    <div style="font-size:.68rem;color:#a39e96;margin-top:.7rem;text-align:center;">
-      Penalizace za cycle time, spillover, flow efficiency, outliery, otevřené chyby a defect rate.
-    </div>
-  </div>
 </div>
 """, unsafe_allow_html=True)
 
 st.markdown("<br>", unsafe_allow_html=True)
 
 sr_val = metrics.get("spillover_rate", 0)
-ct_val = metrics.get("avg_cycle_time")
 fe_val = metrics.get("flow_efficiency")
 cd_val = metrics.get("commit_done_ratio")
 dr_val = metrics.get("defect_rate")
@@ -1931,7 +1853,7 @@ story_count  = metrics.get("story_count", 0)
 standalone_bug_count = metrics.get("standalone_bug_count", 0)
 standalone_bug_open  = metrics.get("standalone_bug_open", 0)
 
-c1, c2, c3, c4, c5, c6 = st.columns(6)
+c1, c2, c3, c4, c5 = st.columns(5)
 with c1:
     st.metric(
         "Velocity (Stories)",
@@ -1950,15 +1872,12 @@ with c2:
               "a méně kapacity na nové features. Zdravé: pod ~20 % z celkové práce."),
     )
 with c3:
-    st.metric("Avg. Cycle Time", f"{ct_val} dní" if ct_val else "—",
-              help="Průměrný čas od vytvoření po dokončení. Cíl: pod 5 dní (DORA).")
-with c4:
     st.metric("Spillover", f"{sr_val}%",
               help="Nedokončené issues přecházející dál. Zdravé: pod 10%.")
-with c5:
+with c4:
     st.metric("Flow Efficiency", f"{fe_val}%" if fe_val else "—",
               help="Podíl aktivní práce vs. čekání. Cíl: 40–65%.")
-with c6:
+with c5:
     # Defect Rate = BugSubtask / Story × 100. Pod 100 % = méně než 1 chyba/story.
     st.metric(
         "Defect Rate",
@@ -2208,7 +2127,7 @@ st.markdown('<div id="expert"></div>', unsafe_allow_html=True)
 section("🧠", "Agile Expert — zhodnocení sprintu")
 
 observations, actions, stat_review = agile_expert_analysis(
-    metrics, outlier_ids, health_score, sprint_goal, goal_result, mapping)
+    metrics, outlier_ids, sprint_goal, goal_result, mapping)
 
 tab_obs, tab_act, tab_stats = st.tabs([
     f"📋 Zhodnocení ({len(observations)})",
