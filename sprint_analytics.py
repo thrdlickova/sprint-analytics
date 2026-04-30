@@ -518,17 +518,32 @@ def compute_metrics(df, mapping):
         # vyhneme se tak nezarovnaným indexům po filtru.
 
     # Done / spillover
+    # POZN (Fix #6): Spillover počítáme jen na top-level Story+Bug (ne přes všechny issues
+    # vč. subtasků). Subtasky tvoří 70 % issues a typicky se zavírají ve sprintu, takže
+    # by zředily metriku — nereflektovaly by realitu "kolik plánovaných featur jsme nezavřeli".
     if "status" in mapping:
         done_kw  = ["done", "closed", "resolved", "to release", "to merge"]
         issues["_done"] = issues[mapping["status"]].astype(str).str.lower().apply(
             lambda x: any(kw in x for kw in done_kw))
-        total = len(issues)
-        done  = int(issues["_done"].sum())
+        total_all = len(issues)
+        done_all  = int(issues["_done"].sum())
+
+        # Hlavní metrika — jen top-level Story+Bug
+        if type_col:
+            top_mask = issues[type_col].astype(str).str.lower().isin(["story", "bug"])
+        else:
+            top_mask = pd.Series([True] * len(issues), index=issues.index)
+        total_top = int(top_mask.sum())
+        done_top  = int((top_mask & issues["_done"]).sum())
+
         metrics.update({
-            "done_count":     done,
-            "total_count":    total,
-            "spillover_count": total - done,
-            "spillover_rate":  round((total - done) / total * 100, 1) if total > 0 else 0,
+            "done_count":          done_top,
+            "total_count":         total_top,
+            "spillover_count":     total_top - done_top,
+            "spillover_rate":      round((total_top - done_top) / total_top * 100, 1) if total_top > 0 else 0,
+            # Sekundární — přes všechny issues (vč. subtasků), pro zpětnou kompatibilitu
+            "spillover_count_all": total_all - done_all,
+            "spillover_rate_all":  round((total_all - done_all) / total_all * 100, 1) if total_all > 0 else 0,
         })
         if "story_points" in mapping:
             done_sp  = issues.loc[issues["_done"], "_sp"].sum()
@@ -685,9 +700,15 @@ def compute_metrics(df, mapping):
             metrics["defect_open"] = 0
             metrics["standalone_bug_open"] = 0
 
-        # Defect Rate = BugSubtask / Story × 100  (= "bugy z testování na 1 story")
-        # Pod 100 % = méně než 1 chyba/story. Nad 100 % = víc bugů než stories.
+        # Defect Rate = BugSubtask / sum(Story SP) × 100
+        # Normalizováno na velikost práce — Story 1 SP a Story 13 SP se počítají férově.
+        # Pod 50 % = zdravé, 50–100 % = pozor, nad 100 % = víc chyb než SP nového kódu.
+        story_sp_sum = float(metrics.get("stories_planned", 0))
         metrics["defect_rate"] = (
+            round(defect_count / story_sp_sum * 100, 1) if story_sp_sum > 0 else 0
+        )
+        # Sekundární — počet na story (zachováno pro porovnání)
+        metrics["defect_rate_per_story"] = (
             round(defect_count / story_count * 100, 1) if story_count > 0 else 0
         )
         # Zpětná kompatibilita pro starý kód, který četl bug_subtask_*
@@ -765,6 +786,91 @@ def compute_metrics(df, mapping):
             if bc and bc in df.columns else 0)
 
     return issues, metrics
+
+
+def compute_subtask_flow(df, mapping):
+    """Tok času Sub-tasků v okně sprintu.
+
+    Pro každý Sub-task aktivní v okně sprintu spočítá active_window_h
+    = max(sprint_start, created) → min(sprint_end, resolved or now).
+    Pokud sum(time_in_*_h) > active_window_h, časy se proporčně škálují dolů.
+    Vrací median per stav (TODO, In Progress, Review, Testing) + share %.
+    BugSubtasky a Blocked se záměrně vynechávají.
+    """
+    type_col = mapping.get("type")
+    if not type_col or type_col not in df.columns:
+        return None
+
+    # Jen klasické Sub-tasky (BugSubtask vyhozen)
+    t_low = df[type_col].astype(str).str.lower()
+    sub = df[t_low.str.contains("sub-task|subtask", regex=True) &
+             ~t_low.str.contains("bug.?subtask", regex=True)].copy()
+    if sub.empty:
+        return None
+
+    # Sloupce
+    ss_c = mapping.get("sprint_start"); se_c = mapping.get("sprint_end")
+    cr_c = mapping.get("created");      rs_c = mapping.get("resolved")
+    if not all(c and c in sub.columns for c in (ss_c, se_c, cr_c)):
+        return None
+
+    ss = pd.to_datetime(sub[ss_c], utc=True, errors="coerce")
+    se = pd.to_datetime(sub[se_c], utc=True, errors="coerce")
+    cr = pd.to_datetime(sub[cr_c], utc=True, errors="coerce")
+    rs = (pd.to_datetime(sub[rs_c], utc=True, errors="coerce")
+          if rs_c and rs_c in sub.columns else pd.Series([pd.NaT] * len(sub), index=sub.index))
+    now = pd.Timestamp.utcnow()
+
+    # Active window v okně sprintu
+    win_start = pd.concat([ss, cr], axis=1).max(axis=1)
+    win_end_raw = rs.fillna(pd.concat(
+        [se, pd.Series([now] * len(sub), index=sub.index)], axis=1).min(axis=1))
+    win_end = pd.concat([se, win_end_raw], axis=1).min(axis=1)
+    sub["_aw_h"] = (win_end - win_start).dt.total_seconds() / 3600
+    active = sub[sub["_aw_h"] > 0].copy()
+    if active.empty:
+        return None
+
+    states = {
+        "todo":     ("TODO",        mapping.get("time_todo")),
+        "progress": ("In Progress", mapping.get("time_progress")),
+        "review":   ("Review",      mapping.get("time_review")),
+        "testing":  ("Testing",     mapping.get("time_testing")),
+    }
+    cols = [(k, lbl, c) for k, (lbl, c) in states.items()
+            if c and c in active.columns]
+    if not cols:
+        return None
+
+    for _, _, c in cols:
+        active[c] = pd.to_numeric(active[c], errors="coerce").clip(lower=0).fillna(0)
+    active["_sum"] = sum(active[c] for _, _, c in cols)
+    # Proporční škálování: pokud suma stavů > active window, ořízni proporčně
+    active["_scale"] = (active["_aw_h"] / active["_sum"]).where(
+        active["_sum"] > active["_aw_h"], 1.0)
+
+    out_states = []
+    grand_total = 0.0
+    for k, lbl, c in cols:
+        scaled = active[c] * active["_scale"]
+        out_states.append({
+            "key": k, "label": lbl,
+            "median": round(float(scaled.median()), 1),
+            "sum_h": float(scaled.sum()),
+        })
+        grand_total += float(scaled.sum())
+
+    for s in out_states:
+        s["share_pct"] = (round(s["sum_h"] / grand_total * 100, 1)
+                          if grand_total > 0 else 0)
+        s["sum_h"] = round(s["sum_h"], 0)
+
+    return {
+        "n": int(len(active)),
+        "n_total": int(len(sub)),
+        "total_h": round(grand_total, 0),
+        "states": out_states,
+    }
 
 
 def compute_health_score(metrics, outlier_ids):
@@ -1256,7 +1362,6 @@ def draw_flow_state_cards(df, mapping):
 
 def agile_expert_analysis(metrics, outlier_ids, sprint_goal, goal_result, mapping):
     sr  = metrics.get("spillover_rate", 0)
-    fe  = metrics.get("flow_efficiency")
     cd  = metrics.get("commit_done_ratio", 100)
     dr  = metrics.get("defect_rate", 0)
     bs_open     = metrics.get("defect_open", 0)
@@ -1315,41 +1420,28 @@ def agile_expert_analysis(metrics, outlier_ids, sprint_goal, goal_result, mappin
     # Práce navíc teče přes subtasky (top-level Story zůstává v TODO),
     # takže cycle time na úrovni Story by stejně nereflektoval realitu.
 
-    # Flow efficiency
-    if fe:
-        if fe >= 50:
-            observations.append({"type":"good",
-                "title":f"Flow efficiency {fe}% — nad průměrem",
-                "detail":"Software týmy cílí na 40–65%. Issues aktivně postupují procesem."})
-        elif fe >= 30:
-            observations.append({"type":"warn",
-                "title":f"Flow efficiency {fe}% — issues čekají",
-                "detail":f"{100-fe:.0f}% času issues čekají nebo jsou blokovány. Blokováno: {metrics.get('blocked_h',0)}h."})
-            actions.append({"akce":"Zmapuj top 3 místa kde issues čekají a odstraň příčinu",
-                "meritko":f"Cíl: flow efficiency nad 50% (aktuálně {fe}%)",
-                "kdy":"Retrospektiva"})
-        else:
-            observations.append({"type":"bad",
-                "title":f"Flow efficiency {fe}% — systémový bloker",
-                "detail":f"Issues tráví méně než třetinu času aktivní prací. {metrics.get('blocked_h',0)}h blokovaně."})
+    # Flow Efficiency vědomě vyhozeno — pro tým s prací přes subtasky a velkou QA fází
+    # je metrika zavádějící. Místo ní používáme sekci "Tok subtasků".
 
-    # Defect rate — chybovost nových features
+    # Defect rate — chybovost nových features (normalizováno na Story SP)
     if dr > 0:
-        if dr <= 100:
+        story_sp = metrics.get('stories_planned', 0)
+        defc     = metrics.get('defect_count', 0)
+        if dr <= 50:
             observations.append({"type":"good",
-                "title":f"Defect Rate {dr:.0f}% — přijatelná chybovost",
-                "detail":f"{metrics.get('defect_count',0)} chyb na {metrics.get('defect_count',0)} stories. Pod hranicí 100% = v průměru méně než 1 chyba na story."})
-        elif dr <= 200:
+                "title":f"Defect Rate {dr:.0f}% — zdravá kvalita",
+                "detail":f"{defc} BugSubtask na {story_sp:g} Story SP. Pod 50 % = méně než 1 chyba na 2 SP nového kódu."})
+        elif dr <= 100:
             observations.append({"type":"warn",
                 "title":f"Defect Rate {dr:.0f}% — zvýšená chybovost features",
-                "detail":f"V průměru {dr/100:.1f} chyby na story. Více pair programmingu nebo přísnější DoD."})
-            actions.append({"akce":"Přidej do DoD: každá story musí mít nulové otevřené bug subtasky",
-                "meritko":f"Cíl: Defect Rate pod 100% (aktuálně {dr:.0f}%)",
+                "detail":f"V průměru {dr/100:.1f} chyby na 1 SP. Více pair programmingu, code review nebo přísnější DoD."})
+            actions.append({"akce":"Přidej do DoD: story se zavírá až s nulovými otevřenými bug subtasky",
+                "meritko":f"Cíl: Defect Rate pod 50 % (aktuálně {dr:.0f}%)",
                 "kdy":"Příští sprint"})
         else:
             observations.append({"type":"bad",
                 "title":f"Defect Rate {dr:.0f}% — vysoká chybovost",
-                "detail":f"V průměru {dr/100:.1f} chyby na story. Testování odhaluje zásadní kvalitativní problémy."})
+                "detail":f"Víc chyb než SP nového kódu ({defc} BugSubtask na {story_sp:g} SP). Zásadní kvalitativní problém — diskutuj DoD a coverage."})
 
     if bs_open > 0:
         observations.append({"type":"warn",
@@ -1412,15 +1504,6 @@ def agile_expert_analysis(metrics, outlier_ids, sprint_goal, goal_result, mappin
          else "Vysoký podíl kapacity jde na opravy chyb — méně prostoru na features. "
               "Zvažte prevenci: code review, testovací pokrytí, definition of done.")))
 
-    fe_s = ("ok" if fe and fe >= 50 else
-            "warn" if fe and fe >= 30 else
-            "bad" if fe else "missing")
-    stat_review.append(sri(
-        "Flow Efficiency",
-        f"{fe}%" if fe else "chybí", fe_s,
-        f"Cílové pásmo: 40–65% (aktuálně {fe}%)." if fe else "Nelze vypočítat.",
-        None if fe else "Přidej time_in_*_h sloupce do exportu."))
-
     sr_s = "ok" if sr <= 10 else ("warn" if sr <= 25 else "bad")
     stat_review.append(sri(
         "Spillover Rate", f"{sr}%", sr_s,
@@ -1432,17 +1515,19 @@ def agile_expert_analysis(metrics, outlier_ids, sprint_goal, goal_result, mappin
             "Commit vs. Done", f"{cd}%", cd_s,
             f"Nad 80% = tým plní sliby (aktuálně {cd}%)."))
 
-    # Chybovost nových features (přejmenováno z Bug Subtasky)
+    # Chybovost nových features (defect rate normalizovaný na Story SP)
     if "defect_count" in metrics:
-        dc   = metrics["defect_count"]
-        dopen= metrics.get("defect_open", 0)
-        dr_s = "ok" if dr <= 100 else ("warn" if dr <= 200 else "bad")
+        dc       = metrics["defect_count"]
+        dopen    = metrics.get("defect_open", 0)
+        story_sp = metrics.get("stories_planned", 0)
+        dr_s = "ok" if dr <= 50 else ("warn" if dr <= 100 else "bad")
         stat_review.append(sri(
             "Chybovost nových features",
             f"{dc} chyb, {dopen} otevřených · Defect Rate {dr:.0f}%",
             dr_s,
-            f"Defect Rate = chyby z testování / počet stories × 100. "
-            f"Pod 100% = v průměru méně než 1 chyba na story (aktuálně {dr:.0f}%).",
+            f"Defect Rate = BugSubtasky / Story SP × 100 (normalizováno na velikost práce). "
+            f"{dc} chyb na {story_sp:g} SP = {dr:.0f} %. "
+            f"Pod 50 % = zdravé, 50–100 % = pozor, nad 100 % = víc chyb než SP nového kódu.",
             "Otevřené chyby = dluh přenášený do příštího sprintu." if dopen > 0 else None))
 
     stat_review.append(sri(
@@ -1501,20 +1586,14 @@ def generate_retro_topics(metrics, outlier_ids, sprint_goal):
             "signal": len(outlier_ids) > 2,
             "signal_text":"Opakující se outliery = systematický problém v refinementu."})
 
-    fe = metrics.get("flow_efficiency")
-    if fe and fe < 50:
-        topics.append({"q":"Kde issues nejvíce stály bez aktivní práce?",
-            "data":f"Flow efficiency {fe}% — issues tráví {100-fe:.0f}% času čekáním. Blokováno: {metrics.get('blocked_h',0)}h.",
-            "signal":True,
-            "signal_text":"Pod 50% znamená systémový bloker — najděte ho a odstraňte."})
-
     dr     = metrics.get("defect_rate", 0)
     bs_open= metrics.get("defect_open", 0)
-    if dr > 100 or bs_open > 0:
+    if dr > 50 or bs_open > 0:
+        story_sp = metrics.get("stories_planned", 0)
         topics.append({"q":"Jak jsme se vypořádali s chybami nalezenými při testování?",
-            "data":f"Defect Rate {dr:.0f}% — {metrics.get('defect_count',0)} chyb, {bs_open} neuzavřených. "
-                   f"Chyby z testování nových features ukazují na chybovost implementace.",
-            "signal": bs_open > 0,
+            "data":f"Defect Rate {dr:.0f} % — {metrics.get('defect_count',0)} chyb na {story_sp:g} Story SP, "
+                   f"{bs_open} neuzavřených. Normalizováno na velikost práce.",
+            "signal": bs_open > 0 or dr > 100,
             "signal_text":"Otevřené chyby = technický dluh přenášený do dalšího sprintu."})
 
     return topics
@@ -1568,6 +1647,7 @@ with st.sidebar:
     nav_items = [
         ("🎯", "Sprint Goal",          "sprint-goal"),
         ("🏆", "Plán vs Dodáno",       "health-score"),
+        ("🔄", "Tok subtasků",         "subtask-flow"),
         ("📉", "Burndown",             "burndown"),
         ("⚠️", "Nedokončené issues",   "spillover"),
         ("⏱",  "Vykázaný čas",        "cas"),
@@ -1842,7 +1922,8 @@ st.markdown(f"""
 st.markdown("<br>", unsafe_allow_html=True)
 
 sr_val = metrics.get("spillover_rate", 0)
-fe_val = metrics.get("flow_efficiency")
+sr_top_total = metrics.get("total_count", 0)
+sr_top_done  = metrics.get("done_count", 0)
 cd_val = metrics.get("commit_done_ratio")
 dr_val = metrics.get("defect_rate")
 vel_stories = metrics.get("velocity_stories", metrics.get("velocity", 0))
@@ -1850,10 +1931,11 @@ bug_cap     = metrics.get("bug_capacity", 0)
 bug_share   = metrics.get("bug_share_pct", 0)
 defect_count = metrics.get("defect_count", 0)
 story_count  = metrics.get("story_count", 0)
+story_sp_planned = metrics.get("stories_planned", 0)
 standalone_bug_count = metrics.get("standalone_bug_count", 0)
 standalone_bug_open  = metrics.get("standalone_bug_open", 0)
 
-c1, c2, c3, c4, c5 = st.columns(5)
+c1, c2, c3, c4 = st.columns(4)
 with c1:
     st.metric(
         "Velocity (Stories)",
@@ -1872,21 +1954,27 @@ with c2:
               "a méně kapacity na nové features. Zdravé: pod ~20 % z celkové práce."),
     )
 with c3:
-    st.metric("Spillover", f"{sr_val}%",
-              help="Nedokončené issues přecházející dál. Zdravé: pod 10%.")
+    st.metric(
+        "Spillover",
+        f"{sr_val}%",
+        delta=(f"{sr_top_total - sr_top_done} z {sr_top_total} top-level"
+               if sr_top_total else None),
+        delta_color="off",
+        help=("Procento nedokončených top-level Story+Bug (subtasky se nepočítají). "
+              "Říká: kolik z plánovaných featur jsme nezavřeli. Zdravé: pod 10 %."),
+    )
 with c4:
-    st.metric("Flow Efficiency", f"{fe_val}%" if fe_val else "—",
-              help="Podíl aktivní práce vs. čekání. Cíl: 40–65%.")
-with c5:
-    # Defect Rate = BugSubtask / Story × 100. Pod 100 % = méně než 1 chyba/story.
+    # Defect Rate = BugSubtask / Story SP × 100  (normalizované na velikost práce)
     st.metric(
         "Defect Rate",
         f"{dr_val:.0f}%" if dr_val is not None else "—",
-        delta=f"{defect_count} BugSubtask / {story_count} Story" if story_count else None,
+        delta=(f"{defect_count} BugSubtask / {story_sp_planned:g} Story SP"
+               if story_sp_planned else None),
         delta_color="off",
-        help=("Kvalita nových features: BugSubtasky (chyby nalezené testery při testování "
-              "Stories) / počet Stories × 100. Pod 100 % = méně než 1 chyba na story (zdravé). "
-              "Nad 200 % = vysoké riziko kvality, přehodnoť Definition of Done a coverage."),
+        help=("Kvalita nových features: BugSubtasky (chyby z testování stories) / "
+              "součet Story SP × 100. Normalizováno na velikost práce — "
+              "Story s 1 SP a 13 SP jsou férově srovnány. "
+              "Pod 50 % = zdravé. Nad 100 % = víc chyb než SP nového kódu."),
     )
 
 # ── Standalone Bugy: separátní informativní panel ──
@@ -1920,6 +2008,144 @@ if standalone_bug_count > 0:
       </div>
     </div>
     """, unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────
+# 2b. TOK SUBTASKŮ — kde tráví čas (jen Sub-task, jen okno sprintu, median)
+# ─────────────────────────────────────────────
+
+subtask_flow = compute_subtask_flow(issues_df, mapping)
+if subtask_flow and subtask_flow["states"]:
+    st.markdown('<div id="subtask-flow"></div>', unsafe_allow_html=True)
+    section("🔄", "Tok subtasků — kde tráví čas")
+
+    sf_n      = subtask_flow["n"]
+    sf_total  = subtask_flow["total_h"]
+    sf_states = subtask_flow["states"]
+
+    # Barvy: TODO=gray, Progress=blue, Review=purple, Testing=amber
+    sf_colors = {
+        "todo":     ("#D3D1C7", "#2C2C2A"),
+        "progress": ("#B5D4F4", "#0C447C"),
+        "review":   ("#CECBF6", "#3C3489"),
+        "testing":  ("#FAC775", "#854F0B"),
+    }
+
+    # Stacked horizontal bar
+    bar_segments = ""
+    legend_items = ""
+    for s in sf_states:
+        bg, fg = sf_colors.get(s["key"], ("#D3D1C7", "#2C2C2A"))
+        if s["share_pct"] > 0:
+            bar_segments += (
+                f'<div style="background:{bg};color:{fg};width:{s["share_pct"]}%;'
+                f'display:flex;align-items:center;justify-content:center;'
+                f'font-size:.74rem;font-weight:600;height:36px;" '
+                f'title="{s["label"]} — {s["share_pct"]} %, median {s["median"]} h">'
+                f'{s["label"]} {s["share_pct"]:.0f}%</div>'
+            )
+        legend_items += (
+            f'<span style="display:inline-flex;align-items:center;gap:6px;'
+            f'font-size:.75rem;color:#5c5449;">'
+            f'<span style="width:10px;height:10px;border-radius:2px;background:{bg};"></span>'
+            f'{s["label"]}</span>'
+        )
+
+    st.markdown(f"""
+    <div style="background:#fffef9;border:1.5px solid #e8e3d8;border-radius:14px;
+                padding:1.3rem 1.6rem;margin-bottom:1rem;">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;
+                  flex-wrap:wrap;gap:.5rem;margin-bottom:.7rem;">
+        <div style="font-size:.84rem;color:#5c5449;">
+          Median času ve stavech, počítáno jen v okně sprintu.
+        </div>
+        <div style="font-size:.74rem;font-family:'DM Mono',monospace;color:#a39e96;">
+          n = {sf_n} aktivních Sub-tasků · suma {sf_total:.0f} h
+        </div>
+      </div>
+      <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:.7rem;">
+        {legend_items}
+      </div>
+      <div style="display:flex;height:36px;border-radius:8px;overflow:hidden;
+                  border:1px solid #e8e3d8;">
+        {bar_segments}
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Tabulka median + share
+    rows_html = ""
+    for s in sf_states:
+        bg, _ = sf_colors.get(s["key"], ("#D3D1C7", "#2C2C2A"))
+        rows_html += (
+            f'<tr>'
+            f'<td style="padding:.55rem .6rem;border-bottom:1px solid #f0ece4;">'
+            f'<span style="display:inline-block;width:10px;height:10px;border-radius:2px;'
+            f'background:{bg};margin-right:8px;vertical-align:middle;"></span>{s["label"]}</td>'
+            f'<td style="padding:.55rem .6rem;border-bottom:1px solid #f0ece4;'
+            f'text-align:right;font-variant-numeric:tabular-nums;">{s["median"]:g} h</td>'
+            f'<td style="padding:.55rem .6rem;border-bottom:1px solid #f0ece4;'
+            f'text-align:right;font-variant-numeric:tabular-nums;">{s["share_pct"]:g} %</td>'
+            f'</tr>'
+        )
+
+    st.markdown(f"""
+    <table style="width:100%;border-collapse:collapse;font-size:.84rem;
+                  background:#fffef9;border:1.5px solid #e8e3d8;border-radius:10px;
+                  overflow:hidden;margin-bottom:1rem;">
+      <thead>
+        <tr style="background:#f7f3ec;">
+          <th style="padding:.6rem .6rem;text-align:left;font-weight:500;
+                     color:#6b6359;font-size:.78rem;">Stav</th>
+          <th style="padding:.6rem .6rem;text-align:right;font-weight:500;
+                     color:#6b6359;font-size:.78rem;">Median (h)</th>
+          <th style="padding:.6rem .6rem;text-align:right;font-weight:500;
+                     color:#6b6359;font-size:.78rem;">% času</th>
+        </tr>
+      </thead>
+      <tbody>{rows_html}</tbody>
+    </table>
+    """, unsafe_allow_html=True)
+
+    # Auto-insight — interpretace dat
+    st_map = {s["key"]: s for s in sf_states}
+    todo_pct  = st_map.get("todo",     {}).get("share_pct", 0)
+    todo_med  = st_map.get("todo",     {}).get("median", 0)
+    prog_pct  = st_map.get("progress", {}).get("share_pct", 0)
+    rev_med   = st_map.get("review",   {}).get("median", 0)
+    test_pct  = st_map.get("testing",  {}).get("share_pct", 0)
+    test_med  = st_map.get("testing",  {}).get("median", 0)
+
+    insights = []
+    if todo_pct > 35:
+        insights.append(
+            f"<b>{todo_pct:g} % času čekají v TODO</b> — typický Sub-task sedí "
+            f"~{todo_med:g} h v TODO, než ho někdo vezme. "
+            "Refinement připravený, ale práce se nepouští do flow.")
+    if test_pct > 25:
+        insights.append(
+            f"<b>{test_pct:g} % času v Testing</b> (median {test_med:g} h) — "
+            "testovací fáze trvá srovnatelně s čekáním. "
+            "Bottleneck v testerské kapacitě nebo náročnosti testů?")
+    if rev_med == 0:
+        insights.append(
+            "<b>Review je 0 h (median)</b> — tým prakticky přeskakuje review krok. "
+            "Záměr (řeší se v PR mimo Jiru), nebo skrytá mezera v procesu?")
+    if prog_pct < 30:
+        insights.append(
+            f"<b>Aktivní vývoj zabírá jen {prog_pct:g} %</b> — flow efficiency "
+            "je nízká, většina času je čekání nebo handoff.")
+
+    if insights:
+        bullets = "".join(f"<li style='margin-bottom:.4rem;'>{i}</li>" for i in insights)
+        st.markdown(f"""
+        <div style="background:#f0f4ff;border:1.5px solid #c4b5fd;border-radius:13px;
+                    padding:1rem 1.2rem;margin-bottom:1.5rem;font-size:.84rem;
+                    color:#3730a3;line-height:1.6;">
+          <div style="font-weight:600;margin-bottom:.5rem;">Co data říkají:</div>
+          <ul style="margin:0;padding-left:1.1rem;">{bullets}</ul>
+        </div>
+        """, unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────
