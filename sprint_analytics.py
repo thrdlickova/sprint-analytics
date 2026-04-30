@@ -1977,37 +1977,7 @@ with c4:
               "Pod 50 % = zdravé. Nad 100 % = víc chyb než SP nového kódu."),
     )
 
-# ── Standalone Bugy: separátní informativní panel ──
-if standalone_bug_count > 0:
-    bug_color = "#9a3020" if standalone_bug_open >= 5 else ("#9a6a20" if standalone_bug_open > 0 else "#4a8040")
-    bug_status = ("Vyžaduje pozornost" if standalone_bug_open >= 5
-                  else ("Pár otevřených" if standalone_bug_open > 0
-                        else "Vše vyřešeno"))
-    st.markdown(f"""
-    <div style="margin-top:1rem;background:#fff8f4;border:1.5px solid #e8d4c8;
-                border-radius:12px;padding:.9rem 1.2rem;display:flex;
-                justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.6rem;">
-      <div>
-        <div style="font-size:.7rem;font-family:'DM Mono',monospace;color:#a39e96;
-                    text-transform:uppercase;letter-spacing:.1em;">
-          Standalone Bugy ve sprintu
-        </div>
-        <div style="font-size:.84rem;color:#5c5449;margin-top:.2rem;">
-          Bugy nejsou subtasky stories — typicky chyby z produkce nebo dřívějších sprintů.
-          Měřeno odděleně, aby nezkreslovaly Defect Rate kvality nových features.
-        </div>
-      </div>
-      <div style="text-align:right;">
-        <div style="font-size:1.6rem;font-family:'DM Serif Display',serif;color:#2c2922;
-                    font-weight:500;line-height:1;">
-          {standalone_bug_count}<span style="font-size:.8rem;color:#a39e96;"> celkem</span>
-        </div>
-        <div style="font-size:.78rem;color:{bug_color};margin-top:.2rem;font-weight:500;">
-          {standalone_bug_open} otevřených · {bug_status}
-        </div>
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
+# Standalone Bugy — informativní panel odstraněn (Bug Capacity dlaždice nahoře stačí).
 
 
 # ─────────────────────────────────────────────
@@ -2031,17 +2001,58 @@ if subtask_flow and subtask_flow["states"]:
         "testing":  ("#FAC775", "#854F0B"),
     }
 
-    # Stacked horizontal bar
+    # ── Auto-insighty per stav (přesunuté do tooltipů místo info boxu) ──
+    st_map = {s["key"]: s for s in sf_states}
+    todo_pct  = st_map.get("todo",     {}).get("share_pct", 0)
+    todo_med  = st_map.get("todo",     {}).get("median", 0)
+    prog_pct  = st_map.get("progress", {}).get("share_pct", 0)
+    rev_med   = st_map.get("review",   {}).get("median", 0)
+    test_pct  = st_map.get("testing",  {}).get("share_pct", 0)
+    test_med  = st_map.get("testing",  {}).get("median", 0)
+
+    tooltip_per_state = {}
+    if todo_pct > 35:
+        tooltip_per_state["todo"] = (
+            f"{todo_pct:g} % času čekají v TODO — typický Sub-task sedí "
+            f"~{todo_med:g} h v TODO, než ho někdo vezme. "
+            "Refinement připravený, ale práce se nepouští do flow."
+        )
+    if test_pct > 25:
+        tooltip_per_state["testing"] = (
+            f"{test_pct:g} % času v Testing (median {test_med:g} h) — "
+            "testovací fáze trvá srovnatelně s čekáním. "
+            "Bottleneck v testerské kapacitě nebo náročnosti testů?"
+        )
+    if rev_med == 0:
+        tooltip_per_state["review"] = (
+            "Review je 0 h (median) — tým prakticky přeskakuje review krok. "
+            "Záměr (řeší se v PR mimo Jiru), nebo skrytá mezera v procesu?"
+        )
+    if prog_pct < 30:
+        tooltip_per_state["progress"] = (
+            f"Aktivní vývoj zabírá jen {prog_pct:g} % — flow efficiency "
+            "je nízká, většina času je čekání nebo handoff."
+        )
+
+    def _tooltip_for(state):
+        base = f'{state["label"]} — {state["share_pct"]:g} %, median {state["median"]:g} h'
+        extra = tooltip_per_state.get(state["key"])
+        if extra:
+            return f'{base}\n\n{extra}'
+        return base
+
+    # Stacked horizontal bar (s tooltipy nesoucími insighty)
     bar_segments = ""
     legend_items = ""
     for s in sf_states:
         bg, fg = sf_colors.get(s["key"], ("#D3D1C7", "#2C2C2A"))
+        tip = _tooltip_for(s).replace('"', '&quot;')
         if s["share_pct"] > 0:
             bar_segments += (
                 f'<div style="background:{bg};color:{fg};width:{s["share_pct"]}%;'
                 f'display:flex;align-items:center;justify-content:center;'
-                f'font-size:.74rem;font-weight:600;height:36px;" '
-                f'title="{s["label"]} — {s["share_pct"]} %, median {s["median"]} h">'
+                f'font-size:.74rem;font-weight:600;height:36px;cursor:help;" '
+                f'title="{tip}">'
                 f'{s["label"]} {s["share_pct"]:.0f}%</div>'
             )
         legend_items += (
@@ -2058,6 +2069,9 @@ if subtask_flow and subtask_flow["states"]:
                   flex-wrap:wrap;gap:.5rem;margin-bottom:.7rem;">
         <div style="font-size:.84rem;color:#5c5449;">
           Median času ve stavech, počítáno jen v okně sprintu.
+          <span style="color:#a39e96;font-size:.76rem;">
+            (najeď myší na barevný segment pro detail)
+          </span>
         </div>
         <div style="font-size:.74rem;font-family:'DM Mono',monospace;color:#a39e96;">
           n = {sf_n} aktivních Sub-tasků · suma {sf_total:.0f} h
@@ -2073,79 +2087,34 @@ if subtask_flow and subtask_flow["states"]:
     </div>
     """, unsafe_allow_html=True)
 
-    # Tabulka median + share
-    rows_html = ""
+    # ── Karty místo tabulky (jeden řádek, sloupce podle počtu reálných stavů) ──
+    cards_html = ""
     for s in sf_states:
-        bg, _ = sf_colors.get(s["key"], ("#D3D1C7", "#2C2C2A"))
-        rows_html += (
-            f'<tr>'
-            f'<td style="padding:.55rem .6rem;border-bottom:1px solid #f0ece4;">'
-            f'<span style="display:inline-block;width:10px;height:10px;border-radius:2px;'
-            f'background:{bg};margin-right:8px;vertical-align:middle;"></span>{s["label"]}</td>'
-            f'<td style="padding:.55rem .6rem;border-bottom:1px solid #f0ece4;'
-            f'text-align:right;font-variant-numeric:tabular-nums;">{s["median"]:g} h</td>'
-            f'<td style="padding:.55rem .6rem;border-bottom:1px solid #f0ece4;'
-            f'text-align:right;font-variant-numeric:tabular-nums;">{s["share_pct"]:g} %</td>'
-            f'</tr>'
+        bg, fg = sf_colors.get(s["key"], ("#D3D1C7", "#2C2C2A"))
+        cards_html += (
+            '<div style="flex:1 1 0;min-width:160px;background:#fffef9;'
+            'border:1.5px solid #e8e3d8;border-radius:14px;padding:1.1rem 1rem .9rem;'
+            'display:flex;flex-direction:column;align-items:center;text-align:center;'
+            'overflow:hidden;position:relative;">'
+            '<div style="font-size:.82rem;color:#5c5449;font-weight:500;'
+            'margin-bottom:.85rem;letter-spacing:.01em;">'
+            f'{s["label"]}</div>'
+            '<div style="font-size:2.4rem;font-family:\'DM Serif Display\',serif;'
+            'color:#2c2922;font-weight:500;line-height:1;margin-bottom:.6rem;'
+            'font-variant-numeric:tabular-nums;">'
+            f'{s["median"]:g}</div>'
+            '<div style="font-size:.74rem;color:#a39e96;font-family:\'DM Mono\',monospace;'
+            'margin-bottom:.95rem;letter-spacing:.04em;">'
+            'h (medián)</div>'
+            f'<div style="position:absolute;left:0;right:0;bottom:0;height:6px;background:{bg};"></div>'
+            '</div>'
         )
 
-    st.markdown(f"""
-    <table style="width:100%;border-collapse:collapse;font-size:.84rem;
-                  background:#fffef9;border:1.5px solid #e8e3d8;border-radius:10px;
-                  overflow:hidden;margin-bottom:1rem;">
-      <thead>
-        <tr style="background:#f7f3ec;">
-          <th style="padding:.6rem .6rem;text-align:left;font-weight:500;
-                     color:#6b6359;font-size:.78rem;">Stav</th>
-          <th style="padding:.6rem .6rem;text-align:right;font-weight:500;
-                     color:#6b6359;font-size:.78rem;">Median (h)</th>
-          <th style="padding:.6rem .6rem;text-align:right;font-weight:500;
-                     color:#6b6359;font-size:.78rem;">% času</th>
-        </tr>
-      </thead>
-      <tbody>{rows_html}</tbody>
-    </table>
-    """, unsafe_allow_html=True)
-
-    # Auto-insight — interpretace dat
-    st_map = {s["key"]: s for s in sf_states}
-    todo_pct  = st_map.get("todo",     {}).get("share_pct", 0)
-    todo_med  = st_map.get("todo",     {}).get("median", 0)
-    prog_pct  = st_map.get("progress", {}).get("share_pct", 0)
-    rev_med   = st_map.get("review",   {}).get("median", 0)
-    test_pct  = st_map.get("testing",  {}).get("share_pct", 0)
-    test_med  = st_map.get("testing",  {}).get("median", 0)
-
-    insights = []
-    if todo_pct > 35:
-        insights.append(
-            f"<b>{todo_pct:g} % času čekají v TODO</b> — typický Sub-task sedí "
-            f"~{todo_med:g} h v TODO, než ho někdo vezme. "
-            "Refinement připravený, ale práce se nepouští do flow.")
-    if test_pct > 25:
-        insights.append(
-            f"<b>{test_pct:g} % času v Testing</b> (median {test_med:g} h) — "
-            "testovací fáze trvá srovnatelně s čekáním. "
-            "Bottleneck v testerské kapacitě nebo náročnosti testů?")
-    if rev_med == 0:
-        insights.append(
-            "<b>Review je 0 h (median)</b> — tým prakticky přeskakuje review krok. "
-            "Záměr (řeší se v PR mimo Jiru), nebo skrytá mezera v procesu?")
-    if prog_pct < 30:
-        insights.append(
-            f"<b>Aktivní vývoj zabírá jen {prog_pct:g} %</b> — flow efficiency "
-            "je nízká, většina času je čekání nebo handoff.")
-
-    if insights:
-        bullets = "".join(f"<li style='margin-bottom:.4rem;'>{i}</li>" for i in insights)
-        st.markdown(f"""
-        <div style="background:#f0f4ff;border:1.5px solid #c4b5fd;border-radius:13px;
-                    padding:1rem 1.2rem;margin-bottom:1.5rem;font-size:.84rem;
-                    color:#3730a3;line-height:1.6;">
-          <div style="font-weight:600;margin-bottom:.5rem;">Co data říkají:</div>
-          <ul style="margin:0;padding-left:1.1rem;">{bullets}</ul>
-        </div>
-        """, unsafe_allow_html=True)
+    st.markdown(
+        f'<div style="display:flex;gap:.9rem;flex-wrap:wrap;margin-bottom:1.5rem;">'
+        f'{cards_html}</div>',
+        unsafe_allow_html=True,
+    )
 
 
 # ─────────────────────────────────────────────
@@ -2160,13 +2129,7 @@ if sprint_start and sprint_end:
     if fig_bd:
         st.pyplot(fig_bd, use_container_width=True)
         plt.close(fig_bd)
-        if remaining_pct and remaining_pct > 5:
-            st.markdown(f"""
-            <div style="background:#fff8f0;border:1.5px solid #fdba74;border-radius:10px;
-                        padding:.7rem 1rem;margin-top:.5rem;font-size:.82rem;color:#9a3412;">
-              Na konci sprintu zbývalo <strong>{remaining_pct}%</strong> story points nedokončených.
-            </div>
-            """, unsafe_allow_html=True)
+        # Metrika "na konci sprintu zbývalo X %" odstraněna — info je už v grafu samotném.
 else:
     st.info("Burndown není dostupný — chybí sprint_start / sprint_end v datech.")
 
@@ -2257,47 +2220,26 @@ section("⏱", "Vykázaný čas")
 
 fig_type = draw_time_by_type(df, mapping)
 if fig_type:
-    _, col_c, _ = st.columns([1, 2, 1])
-    with col_c:
-        st.markdown(
-            "<div style='font-size:.65rem;color:#a39e96;text-align:center;margin-bottom:.4rem;"
-            "font-family:DM Mono,monospace;text-transform:uppercase;letter-spacing:.08em;'>"
-            "Vykázaný čas podle typu issue</div>",
-            unsafe_allow_html=True)
-        st.pyplot(fig_type, use_container_width=True)
-        plt.close(fig_type)
+    # Koláč na plnou šířku (bez bočních paddingů), výraznější vizuál
+    st.markdown(
+        "<div style='font-size:.65rem;color:#a39e96;text-align:center;margin-bottom:.6rem;"
+        "font-family:DM Mono,monospace;text-transform:uppercase;letter-spacing:.08em;'>"
+        "Vykázaný čas podle typu issue</div>",
+        unsafe_allow_html=True)
+    # Zvětšení figure (předpokládáme matplotlib figure z draw_time_by_type)
+    try:
+        fig_type.set_size_inches(11, 6.5)
+    except Exception:
+        pass
+    st.pyplot(fig_type, use_container_width=True)
+    plt.close(fig_type)
 else:
     st.info("Chybí data o časech.")
 
-st.markdown(
-    "<div style='font-size:.65rem;color:#a39e96;margin-top:1.3rem;margin-bottom:.45rem;"
-    "font-family:DM Mono,monospace;text-transform:uppercase;letter-spacing:.08em;'>"
-    "Stories vs. bugy — rozložení hodin</div>",
-    unsafe_allow_html=True)
-fig_unpl = draw_unplanned_work(df, mapping)
-if fig_unpl:
-    st.pyplot(fig_unpl, use_container_width=True)
-    plt.close(fig_unpl)
-
-result_flow = draw_flow_state_cards(df, mapping)
-if result_flow:
-    fig_flow, fe_num = result_flow
-    fe_color = "#b91c1c" if fe_num and fe_num < 50 else ("#b45309" if fe_num and fe_num < 65 else "#4a8040")
-    fe_badge = (f" &nbsp;·&nbsp; <span style='color:{fe_color};font-weight:600;'>"
-                f"Flow Efficiency: {fe_num}%</span>") if fe_num else ""
-    st.markdown(
-        f"<div style='font-size:.65rem;color:#a39e96;margin-top:1.3rem;margin-bottom:.4rem;"
-        f"font-family:DM Mono,monospace;text-transform:uppercase;letter-spacing:.08em;'>"
-        f"Jak issues trávily čas v procesu{fe_badge}</div>",
-        unsafe_allow_html=True)
-    st.pyplot(fig_flow, use_container_width=True)
-    plt.close(fig_flow)
-    st.markdown(
-        "<div style='font-size:.72rem;color:#a39e96;margin-top:.3rem;"
-        "font-family:DM Mono,monospace;'>"
-        "Aktivní práce = In Progress + Review + Testing &nbsp;·&nbsp; Cílové pásmo: 40–65%"
-        "</div>",
-        unsafe_allow_html=True)
+# Bloky "Stories vs. bugy — rozložení hodin" (draw_unplanned_work) a
+# "Jak issues trávily čas v procesu" (draw_flow_state_cards) odstraněny:
+#   - plánovaná vs neplánovaná práce: dle požadavku
+#   - flow state cards: duplicita s novou sekcí Tok subtasků
 
 
 # ─────────────────────────────────────────────
