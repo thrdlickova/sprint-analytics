@@ -1,6 +1,7 @@
 from jira import JIRA
 from dotenv import load_dotenv
 import os
+import json
 import pandas as pd
 from datetime import datetime
 import pytz
@@ -173,6 +174,36 @@ def analyze_changelog(issue):
     for key in ["time_in_todo_h", "time_in_progress_h", "time_in_review_h", "time_in_testing_h", "time_blocked_h"]:
         result[key] = round(result[key], 2)
     return result
+# ── Meta o sprintu (name, goal, state, dates) ──
+# Sprint goal v JIŘE bývá multi-line s číslovanými odrážkami → ukládáme tak jak je.
+print(f"Načítám meta sprintu {SPRINT_ID} (name, goal, state)...")
+sprint_meta = {
+    "id": SPRINT_ID,
+    "name": None,
+    "goal": None,
+    "state": None,
+    "startDate": None,
+    "endDate": None,
+}
+try:
+    s = jira.sprint(SPRINT_ID)
+    raw = getattr(s, "raw", None) or {}
+    sprint_meta.update({
+        "name":      raw.get("name") or getattr(s, "name", None),
+        "goal":      raw.get("goal") or getattr(s, "goal", None),
+        "state":     raw.get("state") or getattr(s, "state", None),
+        "startDate": raw.get("startDate"),
+        "endDate":   raw.get("endDate"),
+    })
+    print(f"  Sprint: {sprint_meta['name']} ({sprint_meta['state']})")
+    if sprint_meta["goal"]:
+        preview = sprint_meta['goal'][:80].replace('\n', ' ⏎ ')
+        print(f"  Goal:   {preview}{'…' if len(sprint_meta['goal']) > 80 else ''}")
+    else:
+        print("  Goal:   (prázdný v JIŘE)")
+except Exception as e:
+    print(f"  ⚠ Nepodařilo se načíst sprint meta: {e}")
+
 # Načtení issues
 print(f"Načítám issues ze sprintu {SPRINT_ID}...")
 issues = jira.search_issues(
@@ -197,6 +228,7 @@ for idx, issue in enumerate(issues):
         parent = f.parent.key
     data.append({
         "issue_id": issue.key,
+        "summary": getattr(f, "summary", None),    # ← NOVÉ: název pro detekci [RC]
         "issue_type": f.issuetype.name if f.issuetype else None,
         "story_points": getattr(f, STORY_POINTS_FIELD, None),
         "sprint_start": sprint_start,
@@ -247,7 +279,8 @@ if mid_count > 0:
 
 # Seřazení sloupců
 df = df[[
-    "issue_id", "issue_type", "story_points", "sprint_start", "sprint_end",
+    "issue_id", "summary",                                    # ← summary nahoře
+    "issue_type", "story_points", "sprint_start", "sprint_end",
     "sprint_added_date", "mid_sprint",                        # ← NOVÉ sloupce
     "assignee", "status_final", "created", "resolved",
     "assigned_from", "assigned_to", "assignee_change_count",
@@ -255,7 +288,23 @@ df = df[[
     "time_in_review_h", "time_in_testing_h", "time_blocked_h",
     "timespent_h", "subtasks_timespent_h", "total_timespent_h", "parent_issue"
 ]]
-df.to_csv("sprint_3132_MOB.csv", index=False)
-print(f"\nHotovo! Data uložena do sprint_3132_MOB.csv")
-print(f"Celkem {len(df)} issues")
+csv_path  = f"sprint_{SPRINT_ID}_MOB.csv"
+meta_path = f"sprint_{SPRINT_ID}_MOB_meta.json"
+df.to_csv(csv_path, index=False)
+
+# Meta JSON vedle CSV (sprint_analytics .py si ho najde podle CSV názvu)
+with open(meta_path, "w", encoding="utf-8") as fh:
+    json.dump(sprint_meta, fh, ensure_ascii=False, indent=2)
+
+# Spočítat RC bugy hned tady, ať máš info na konzoli
+rc_mask = (
+    df["issue_type"].astype(str).str.lower().eq("bug") &
+    df["summary"].astype(str).str.strip().str.upper().str.startswith("[RC]")
+)
+rc_count = int(rc_mask.sum())
+rc_hours = round(float(df.loc[rc_mask, "total_timespent_h"].sum()), 1)
+
+print(f"\nHotovo! Data uložena do {csv_path}")
+print(f"Sprint meta uložena do {meta_path}")
+print(f"Celkem {len(df)} issues · 🚨 RC bugů: {rc_count} ({rc_hours} h celkem)")
 print(df[["issue_id", "issue_type", "story_points", "status_final", "mid_sprint", "total_timespent_h"]].head(10))
