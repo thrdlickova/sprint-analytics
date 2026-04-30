@@ -73,6 +73,28 @@ st.set_page_config(
 # ─────────────────────────────────────────────
 # GLOBÁLNÍ MATPLOTLIB NASTAVENÍ — ostré, čisté
 # ─────────────────────────────────────────────
+# ── Fonty: registrace DM Sans / DM Mono / DM Serif Display ──
+# Soubory očekáváme ve fonts/ vedle skriptu. Stáhni je jednorázově: python3 setup_fonts.py
+# Když fonts/ neexistuje, zůstávají systémové fallbacky (Helvetica → Arial → DejaVu Sans).
+def _register_local_fonts():
+    try:
+        from matplotlib import font_manager
+        fonts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+        if not os.path.isdir(fonts_dir):
+            return False
+        registered = 0
+        for fn in os.listdir(fonts_dir):
+            if fn.lower().endswith((".ttf", ".otf")):
+                font_manager.fontManager.addfont(os.path.join(fonts_dir, fn))
+                registered += 1
+        return registered > 0
+    except Exception:
+        return False
+
+_FONTS_OK = _register_local_fonts()
+
+# Sjednocená typografie: DM Sans = body/labels, DM Mono = čísla, DM Serif = display.
+# Fallbacky drží konzistenci i bez stažených fontů.
 matplotlib.rcParams.update({
     "figure.dpi":       150,
     "savefig.dpi":      150,
@@ -81,6 +103,11 @@ matplotlib.rcParams.update({
     "lines.antialiased": True,
     "patch.antialiased": True,
     "font.family":      "sans-serif",
+    "font.sans-serif":  ["DM Sans", "Helvetica", "Arial", "DejaVu Sans"],
+    "font.monospace":   ["DM Mono", "Menlo", "Consolas", "DejaVu Sans Mono"],
+    # Tabular numbers tam, kde to font.feature řeší (matplotlib zatím parciálně)
+    "axes.labelweight": "normal",
+    "axes.titleweight": "normal",
 })
 
 # ─────────────────────────────────────────────
@@ -113,15 +140,19 @@ def chart_setup(ax, fig=None):
     for sp in ax.spines.values():
         sp.set_edgecolor("#e8e3d8")
         sp.set_linewidth(0.8)
-    # Sjednocené fonty — DM Mono styl pro osy
+    # Sjednocené fonty — DM Mono pro tick labels (čísla os) + DM Sans pro axis labels
     ax.tick_params(colors="#5c5449", labelsize=9, length=3, width=0.8)
     for label in ax.get_xticklabels() + ax.get_yticklabels():
-        label.set_fontfamily("DejaVu Serif")
+        label.set_fontfamily("DM Mono")     # čísla na osách
         label.set_color("#5c5449")
     ax.xaxis.label.set_color("#5c5449")
-    ax.xaxis.label.set_fontfamily("DejaVu Sans Mono")
+    ax.xaxis.label.set_fontfamily("DM Sans")
     ax.yaxis.label.set_color("#5c5449")
-    ax.yaxis.label.set_fontfamily("DejaVu Sans Mono")
+    ax.yaxis.label.set_fontfamily("DM Sans")
+    # Title — pokud někdo nastaví ax.set_title, taky DM Sans
+    if ax.title is not None:
+        ax.title.set_fontfamily("DM Sans")
+        ax.title.set_color("#2c2922")
 
 
 # ─────────────────────────────────────────────
@@ -210,8 +241,17 @@ section[data-testid="stFileUploader"] > label { display:none!important; }
 .sec-ttl { font-family:'DM Serif Display',serif!important; font-weight:400!important; }
 /* Tabulka hodnoty — sans */
 .dt td { font-family:'DM Sans',sans-serif!important; }
-/* Tabulka mono hodnoty */
+/* Tabulka mono hodnoty (ID issues, technické štítky) */
 .dt .mono { font-family:'DM Mono',monospace!important; }
+/* Tabulka čísla — Mono + tabular-nums (desetinné čárky pod sebou) */
+.dt .num {
+  font-family:'DM Mono',monospace!important;
+  font-variant-numeric:tabular-nums!important;
+  font-feature-settings:"tnum"!important;
+  text-align:right!important;
+  color:#2c2922!important;
+}
+.dt th.num-h { text-align:right!important; }
 
 /* ── Alerts & expanders ── */
 div[data-testid="stAlert"]{
@@ -231,6 +271,8 @@ div[data-testid="stAlert"]{
 [data-testid="stMetricValue"]{
   font-family:'DM Serif Display',serif!important;
   font-size:1.7rem!important;color:#2c2922!important;
+  font-variant-numeric:tabular-nums!important;
+  font-feature-settings:"tnum"!important;
 }
 [data-testid="stMetricLabel"]{
   font-family:'DM Mono',monospace!important;font-size:.68rem!important;
@@ -493,8 +535,48 @@ def detect_columns(cols):
 
 
 def htable(df, spillover_ids=None, avg_label="— průměr"):
+    """Renderuje DataFrame jako stylovanou HTML tabulku.
+
+    Typografie:
+      • název / textový sloupec  → DM Sans (default v .dt td)
+      • ID issue (sloupec "Issue"/"ID" nebo první sloupec) → DM Mono (.mono)
+      • čísla (auto-detekce numerických sloupců) → DM Mono + tabular-nums (.num)
+    """
     spillover_ids = [str(x) for x in (spillover_ids or [])]
-    headers = "".join(f"<th>{hl.escape(str(c))}</th>" for c in df.columns)
+
+    # Auto-detekce numerických sloupců — buď přes dtype, nebo pokud jsou hodnoty
+    # parsovatelné na float u většiny řádků (≥ 70 %), bereme to jako číselný sloupec.
+    import numbers
+    def _is_numlike_str(s):
+        try:
+            float(str(s).replace(",", ".").replace(" ", "").rstrip("%h"))
+            return True
+        except Exception:
+            return False
+
+    numeric_cols = set()
+    for col in df.columns:
+        col_str = str(col)
+        # textové výjimky — i když by to vypadalo numericky, držíme jako text
+        if col_str in ("Issue", "ID", "Stav", "Status", "Typ", "Type", "Název", "Name",
+                       "Vyřešeno?", "Přidáno", "Sprint"):
+            continue
+        ser = df[col]
+        if pd.api.types.is_numeric_dtype(ser):
+            numeric_cols.add(col_str)
+            continue
+        # heuristika pro stringy ("12.5", "5 SP", "30 %", "1.4 h")
+        sample = ser.dropna().astype(str).head(20).tolist()
+        if sample and sum(1 for v in sample if _is_numlike_str(v)) / len(sample) >= 0.7:
+            numeric_cols.add(col_str)
+
+    # Header — pravé zarovnání u číselných sloupců
+    header_cells = []
+    for c in df.columns:
+        cls = " class='num-h'" if str(c) in numeric_cols else ""
+        header_cells.append(f"<th{cls}>{hl.escape(str(c))}</th>")
+    headers = "".join(header_cells)
+
     rows = ""
     for _, row in df.iterrows():
         vals = list(row)
@@ -513,6 +595,8 @@ def htable(df, spillover_ids=None, avg_label="— průměr"):
                       else ("s-active" if any(k in sv.lower() for k in ["progress", "review", "testing"])
                             else "s-todo"))
                 cells += f"<td><span class='{sc}'>{hl.escape(sv)}</span></td>"
+            elif cn in numeric_cols:
+                cells += f"<td><span class='num'>{hl.escape(sv)}</span></td>"
             else:
                 cells += f"<td>{hl.escape(sv)}</td>"
         rows += f"<tr{cls}>{cells}</tr>"
@@ -1051,7 +1135,7 @@ def draw_burndown(issues_df, mapping, sprint_start, sprint_end):
             xy=(dates[-1], actual[-1]),
             fontsize=8.5, color="#5c5449",
             va="bottom", ha="right",
-            fontfamily="DejaVu Serif",
+            fontfamily="DM Sans",
         )
 
     # Víkendy — jemné šedé pozadí
@@ -1066,17 +1150,17 @@ def draw_burndown(issues_df, mapping, sprint_start, sprint_end):
     ax.set_ylim(0, total_sp * 1.12)
     ax.tick_params(colors="#5c5449", labelsize=9, length=3, width=0.8)
     for label in ax.get_xticklabels():
-        label.set_fontfamily("DejaVu Serif")
+        label.set_fontfamily("DM Sans")
         label.set_color("#5c5449")
     for label in ax.get_yticklabels():
-        label.set_fontfamily("DejaVu Serif")
+        label.set_fontfamily("DM Sans")
         label.set_color("#5c5449")
     plt.xticks(rotation=35, ha="right")
     ax.set_ylabel("Story points", color="#5c5449", fontsize=9,
-                  fontfamily="DejaVu Sans Mono")
+                  fontfamily="DM Mono")
     ax.legend(loc="upper right", frameon=True, facecolor="#fffef9",
               edgecolor="#e8e3d8", labelcolor="#5c5449", fontsize=9,
-              prop={"family": "DejaVu Sans Mono"}, framealpha=0.95)
+              prop={"family": "DM Mono"}, framealpha=0.95)
     plt.tight_layout(pad=0.6)
 
     if not actual:
@@ -1134,20 +1218,20 @@ def draw_time_by_type(df, mapping):
         at.set_fontsize(11)
         at.set_fontweight("bold")
         at.set_color("#fffef9")
-        at.set_fontfamily("DejaVu Serif")
+        at.set_fontfamily("DM Sans")
 
     # Střed — serif font pro číslo, mono pro popisek
     ax.text(0,  0.08, f"{total_h:.0f}h", ha="center", va="center",
             fontsize=15, fontweight="bold", color="#2c2922",
-            fontfamily="DejaVu Serif")
+            fontfamily="DM Sans")
     ax.text(0, -0.18, "celkem", ha="center", va="center",
-            fontsize=8.5, color="#a39e96", fontfamily="DejaVu Sans Mono")
+            fontsize=8.5, color="#a39e96", fontfamily="DM Mono")
 
     legend_labels = [f"{row[type_col]}  {row['_total_h']:.0f}h" for _, row in by_type.iterrows()]
     ax.legend(wedges, legend_labels, loc="lower center",
               bbox_to_anchor=(0.5, -0.1), ncol=len(by_type),
               frameon=False, fontsize=9, labelcolor="#5c5449",
-              prop={"family": "DejaVu Sans Mono"})
+              prop={"family": "DM Mono"})
     plt.tight_layout(pad=0.3)
     return fig
 
@@ -1188,11 +1272,11 @@ def draw_unplanned_work(df, mapping):
     ax.text(planned_h / 2, 0,
             f"{planned_h:.0f} h\n{round(planned_h/total*100)}%",
             ha="center", va="center", fontsize=9, color="#fffef9", fontweight="bold",
-            fontfamily="DejaVu Serif")
+            fontfamily="DM Sans")
     ax.text(planned_h + unplanned_h / 2, 0,
             f"{unplanned_h:.0f} h\n{round(unplanned_h/total*100)}%",
             ha="center", va="center", fontsize=9, color="#5c5449", fontweight="bold",
-            fontfamily="DejaVu Serif")
+            fontfamily="DM Sans")
 
     for sp in ax.spines.values():
         sp.set_visible(False)
@@ -1200,7 +1284,7 @@ def draw_unplanned_work(df, mapping):
     ax.set_xticks([])
     ax.legend(loc="lower center", bbox_to_anchor=(0.5, -0.8), ncol=2,
               frameon=False, fontsize=9, labelcolor="#5c5449",
-              prop={"family": "DejaVu Sans Mono"})
+              prop={"family": "DM Mono"})
     plt.tight_layout(pad=0.2)
     return fig
 
@@ -1252,11 +1336,11 @@ def draw_estimation_by_sp(df, mapping):
         idx2 = sp_vals.index(row["sp"])
         ax1.text(idx2, row["mean_h"] + row["std_h"] + 0.4,
                  f"{row['mean_h']:.1f}h", ha="center", fontsize=8.5, color="#c07860",
-                 fontfamily="DejaVu Serif")
+                 fontfamily="DM Sans")
     ax1.set_xticks(x1)
-    ax1.set_xticklabels([f"{int(s)} SP" for s in sp_vals], fontfamily="DejaVu Serif")
-    ax1.set_ylabel("Průměr hodin", color="#5c5449", fontsize=9, fontfamily="DejaVu Sans Mono")
-    ax1.set_title("Průměrný vykázaný čas na SP", fontsize=10, color="#2c2922", pad=10, fontfamily="DejaVu Sans Mono")
+    ax1.set_xticklabels([f"{int(s)} SP" for s in sp_vals], fontfamily="DM Sans")
+    ax1.set_ylabel("Průměr hodin", color="#5c5449", fontsize=9, fontfamily="DM Mono")
+    ax1.set_title("Průměrný vykázaný čas na SP", fontsize=10, color="#2c2922", pad=10, fontfamily="DM Mono")
 
     # Pravý — odchylka od průměru
     def _color(r):
@@ -1275,9 +1359,9 @@ def draw_estimation_by_sp(df, mapping):
     ax2.axhline(y=30,  color=PASTEL["yellow"], linewidth=0.9, linestyle="--")
     ax2.axhline(y=-30, color=PASTEL["green"],  linewidth=0.9, linestyle="--")
     ax2.set_xticks(x2)
-    ax2.set_xticklabels(uniq[id_col].tolist(), rotation=40, ha="right", fontsize=7.5, fontfamily="DejaVu Sans Mono")
-    ax2.set_ylabel("Odchylka od průměru SP (%)", color="#5c5449", fontsize=9, fontfamily="DejaVu Sans Mono")
-    ax2.set_title("Nad/podhodnocení vs. průměr pro dané SP", fontsize=10, color="#2c2922", pad=10, fontfamily="DejaVu Sans Mono")
+    ax2.set_xticklabels(uniq[id_col].tolist(), rotation=40, ha="right", fontsize=7.5, fontfamily="DM Mono")
+    ax2.set_ylabel("Odchylka od průměru SP (%)", color="#5c5449", fontsize=9, fontfamily="DM Mono")
+    ax2.set_title("Nad/podhodnocení vs. průměr pro dané SP", fontsize=10, color="#2c2922", pad=10, fontfamily="DM Mono")
 
     legend_elements = [
         mpatches.Patch(facecolor="#f5c4b0", edgecolor="none", label="> 130% průměru"),
@@ -1287,7 +1371,7 @@ def draw_estimation_by_sp(df, mapping):
     ]
     ax2.legend(handles=legend_elements, loc="upper right", frameon=True,
                facecolor="#fffef9", edgecolor="#e8e3d8", fontsize=8, labelcolor="#5c5449",
-               prop={"family": "DejaVu Sans Mono"})
+               prop={"family": "DM Mono"})
     plt.tight_layout(pad=0.6)
 
     over = uniq[uniq["_ratio"] > 1.3][[id_col, "_sp", "_h", "_ratio"]].copy()
@@ -1370,12 +1454,12 @@ def draw_flow_state_cards(df, mapping):
 
         # Nadpis stavu — větší, výše
         ax.text(0.5, 0.88, label, ha="center", va="center",
-                fontsize=10, color="#5c5449", fontfamily="monospace",
+                fontsize=10, color="#5c5449", fontfamily="DM Mono",
                 transform=ax.transAxes)
         val_str = f"{days}" if days is not None else "—"
         ax.text(0.5, 0.52, val_str, ha="center", va="center",
                 fontsize=30, color="#2c2922",
-                fontfamily="DejaVu Serif", transform=ax.transAxes)
+                fontfamily="DM Sans", transform=ax.transAxes)
         ax.text(0.5, 0.18, "dní průměrně", ha="center", va="center",
                 fontsize=8, color="#a39e96", transform=ax.transAxes)
 
