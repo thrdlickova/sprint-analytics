@@ -33,6 +33,36 @@ class _LocalFile:
     def seek(self, *args, **kwargs):
         return None
 
+
+def load_sprint_meta(uploaded):
+    """Najde meta JSON podle CSV názvu (např. sprint_3132_MOB.csv → sprint_3132_MOB_meta.json).
+
+    Hledá ve dvou krocích:
+      1) vedle původního souboru, pokud máme cestu (auto-load přes _LocalFile),
+      2) ve složce skriptu — fallback pro případ st.file_uploader, kde cestu nemáme.
+
+    Vrací dict s klíči name/goal/state/startDate/endDate, nebo prázdný dict.
+    """
+    if uploaded is None:
+        return {}
+    name = getattr(uploaded, "name", "") or ""
+    if not name.lower().endswith(".csv"):
+        return {}
+    meta_name = re.sub(r"\.csv$", "_meta.json", name, flags=re.IGNORECASE)
+    candidates = []
+    local_path = getattr(uploaded, "_path", None)
+    if local_path:
+        candidates.append(os.path.join(os.path.dirname(local_path), meta_name))
+    candidates.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), meta_name))
+    for path in candidates:
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as fh:
+                    return json.load(fh) or {}
+            except Exception:
+                return {}
+    return {}
+
 st.set_page_config(
     layout="wide",
     page_title="Sprint Analytics · MOB",
@@ -423,6 +453,7 @@ def detect_columns(cols):
     cl = [c.lower() for c in cols]
     cands = {
         "id":                   ["issue_id", "id", "issue", "key"],
+        "summary":              ["summary", "title", "name"],
         "type":                 ["issue_type", "type", "issuetype"],
         "story_points":         ["story_points", "story point", "sp", "points", "estimate"],
         "sprint":               ["sprint"],
@@ -1557,6 +1588,53 @@ def agile_expert_analysis(metrics, outlier_ids, sprint_goal, goal_result, mappin
              "Hledejte příčiny: nejasné ownership v plánování, blokátory, kapacita."
              if h_status != "ok" else None)))
 
+    # ── RC bugy: observation + stat review ──
+    # Threshold: <15 % = zdravé, 15–25 % = warn (kvalita pre-RC vývoje pozor),
+    # ≥ 25 % = bad (RC opravy ukrajují čtvrtinu+ sprintu).
+    rc_count_m = metrics.get("rc_count", 0)
+    rc_hours_m = metrics.get("rc_hours", 0)
+    rc_share_m = metrics.get("rc_share_pct", 0)
+    if rc_count_m > 0:
+        rc_obs_type = ("bad"  if rc_share_m >= 25 else
+                       "warn" if rc_share_m >= 15 else
+                       "good")
+        observations.append({
+            "type": rc_obs_type,
+            "title": f"RC opravy — {rc_count_m} bugů, {rc_hours_m:g} h ({rc_share_m:g} % času sprintu)",
+            "detail": (f"Release candidate testing odhalil {rc_count_m} chyb, oprava zabrala "
+                       f"{rc_hours_m:g} h = {rc_share_m:g} % vykázaného času sprintu. "
+                       + ("Nad 25 % je vážný signál — kvalita pre-RC vývoje vyžaduje pozornost "
+                          "(přitvrdit code review, testovací pokrytí, dřívější QA)."
+                          if rc_share_m >= 25
+                          else "15–25 % naznačuje, že RC odhaluje víc než drobnosti — proberte v retro."
+                          if rc_share_m >= 15
+                          else "Podíl je v zdravém pásmu — RC ladění proběhlo bez velkého dopadu."))
+        })
+        if rc_share_m >= 15:
+            actions.append({
+                "akce": "Zaveď retro téma 'Co by RC bugy odhalilo dřív'",
+                "meritko": f"Cíl: snížit podíl RC času pod 15 % (aktuálně {rc_share_m:g} %)",
+                "kdy": "Příští retrospektiva"
+            })
+        rc_stat_status = ("ok"   if rc_share_m < 15 else
+                          "warn" if rc_share_m < 25 else
+                          "bad")
+        stat_review.append(sri(
+            "RC bugy",
+            f"{rc_count_m} ks · {rc_hours_m:g} h ({rc_share_m:g} %)",
+            rc_stat_status,
+            ("RC bugy = bugy s prefixem [RC] v názvu, založené během release candidate testování. "
+             "Threshold: pod 15 % zdravé, 15–25 % pozor, nad 25 % vážné."),
+            ("Vysoký podíl času na RC opravy — zvaž zkrácení feedback smyčky pro QA, "
+             "víc unit testů, párové testování."
+             if rc_stat_status != "ok" else None)))
+    else:
+        # Nula RC = pozitivní stat (jen pokud máme summary; jinak missing)
+        if metrics.get("rc_share_pct", None) is not None:
+            stat_review.append(sri(
+                "RC bugy", "0 ks", "ok",
+                "Žádné RC bugy v tomto sprintu — release candidate testing běžel hladce."))
+
     return observations, actions, stat_review
 
 
@@ -1650,6 +1728,7 @@ with st.sidebar:
         ("🔄", "Tok subtasků",         "subtask-flow"),
         ("📉", "Burndown",             "burndown"),
         ("⚠️", "Nedokončené issues",   "spillover"),
+        ("🚨", "RC bugy",              "rc-bugy"),
         ("⏱",  "Vykázaný čas",        "cas"),
         ("📐", "Estimation per SP",    "estimation"),
         ("🧠", "Agile Expert",         "expert"),
@@ -1822,11 +1901,44 @@ st.markdown(f"""
 st.markdown('<div id="sprint-goal"></div>', unsafe_allow_html=True)
 section("🎯", "Sprint Goal")
 
-sprint_goal = st.text_input(
-    "Zadej cíl sprintu (sprint goal)",
-    placeholder="Např: Dodat nový checkout flow a opravit top 3 kritické bugy",
+# ── Pre-fill z JIRA meta JSON (sprint_<ID>_MOB_meta.json vedle CSV) ──
+_meta = load_sprint_meta(uploaded)
+_goal_from_jira = (_meta.get("goal") or "").strip() if _meta else ""
+_sprint_name_jira = (_meta.get("name") or "").strip() if _meta else ""
+
+# Pokud goal v JIŘE bývá číslované odrážky (multi-line), používáme text_area.
+sprint_goal = st.text_area(
+    "Cíl sprintu (sprint goal)",
+    value=_goal_from_jira,
+    placeholder=("Např:\n1. Dodat nový checkout flow\n"
+                 "2. Opravit top 3 RC bugy\n"
+                 "3. Migrace na nové API"),
+    height=130,
     label_visibility="visible",
+).strip()
+
+# Drobný badge — odkud goal pochází
+if _goal_from_jira and sprint_goal == _goal_from_jira:
+    _src_label = f"Načteno z JIRY · {_sprint_name_jira}" if _sprint_name_jira else "Načteno z JIRY"
+    _src_color = "#3730a3"
+    _src_bg    = "#eef2ff"
+elif sprint_goal:
+    _src_label = "Ručně upraveno"
+    _src_color = "#854f0b"
+    _src_bg    = "#fef3c7"
+else:
+    _src_label = ("Goal v JIŘE prázdný — doplň ručně"
+                  if _meta else "Sprint goal zatím nezadán")
+    _src_color = "#6b6359"
+    _src_bg    = "#f2ede6"
+st.markdown(
+    f'<div style="display:inline-block;font-size:.72rem;font-family:\'DM Mono\',monospace;'
+    f'color:{_src_color};background:{_src_bg};padding:.18rem .55rem;border-radius:99px;'
+    f'margin:-.5rem 0 .9rem;letter-spacing:.04em;">'
+    f'{_src_label}</div>',
+    unsafe_allow_html=True,
 )
+
 goal_result = assess_sprint_goal(sprint_goal, metrics)
 
 if sprint_goal and goal_result:
@@ -2209,6 +2321,136 @@ Cíl: pod 10 % top-level work.{extra_note}
         if "Přidáno" in dm.columns:
             dm["Přidáno"] = dm["Přidáno"].apply(lambda x: x[:10] if len(x) >= 10 else x)
         st.markdown(htable(dm), unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────
+# 4b. RC BUGY — release candidate fixy ve sprintu
+# Filter: top-level Bug, summary začíná "[RC]" (case-insensitive).
+# Subtasky a BugSubtasky se záměrně nezahrnují (RC zakládáme jako Bugy).
+# ─────────────────────────────────────────────
+
+st.markdown('<div id="rc-bugy"></div>', unsafe_allow_html=True)
+section("🚨", "RC bugy — release candidate fixy ve sprintu")
+
+_rc_id_col      = mapping.get("id")
+_rc_type_col    = mapping.get("type")
+_rc_summary_col = mapping.get("summary")
+_rc_status_col  = mapping.get("status")
+_rc_total_col   = mapping.get("total_timespent") or mapping.get("timespent")
+
+rc_metrics = {"count": 0, "hours": 0.0, "share_pct": 0.0,
+              "df": None, "missing_summary": False}
+
+if not _rc_summary_col or _rc_summary_col not in df.columns:
+    rc_metrics["missing_summary"] = True
+else:
+    # Unikátní top-level issue (po deduplikaci podle ID — issues_df může mít subtask řádky)
+    _uniq = df.groupby(_rc_id_col).first().reset_index() if _rc_id_col else df.copy()
+    _is_bug    = _uniq[_rc_type_col].astype(str).str.lower().eq("bug") if _rc_type_col else pd.Series(False, index=_uniq.index)
+    _is_rc     = _uniq[_rc_summary_col].astype(str).str.strip().str.upper().str.startswith("[RC]")
+    _rc_rows   = _uniq[_is_bug & _is_rc].copy()
+
+    rc_metrics["count"] = int(len(_rc_rows))
+
+    # Hodiny vykázané na RC (Bug + jeho subtasky → total_timespent_h, jinak fallback timespent)
+    if _rc_total_col and _rc_total_col in _rc_rows.columns:
+        rc_hours = float(pd.to_numeric(_rc_rows[_rc_total_col], errors="coerce").fillna(0).sum())
+    else:
+        rc_hours = 0.0
+    rc_metrics["hours"] = round(rc_hours, 1)
+
+    # % z celkového vykázaného času sprintu
+    sprint_total_h = 0.0
+    if _rc_total_col and _rc_total_col in _uniq.columns:
+        sprint_total_h = float(pd.to_numeric(_uniq[_rc_total_col], errors="coerce").fillna(0).sum())
+    rc_metrics["share_pct"] = (round(rc_hours / sprint_total_h * 100, 1)
+                               if sprint_total_h > 0 else 0.0)
+    rc_metrics["df"] = _rc_rows
+
+# ── Vystaveno do session, ať Agile Expert může vzít RC % do observation ──
+metrics["rc_count"]     = rc_metrics["count"]
+metrics["rc_hours"]     = rc_metrics["hours"]
+metrics["rc_share_pct"] = rc_metrics["share_pct"]
+
+if rc_metrics["missing_summary"]:
+    st.markdown(
+        '<div style="background:#fef3c7;border:1.5px solid #fde68a;border-radius:10px;'
+        'padding:.75rem 1rem;font-size:.84rem;color:#854f0b;">'
+        '⚠ V CSV chybí sloupec <code>summary</code> — RC bugy nelze detekovat.<br>'
+        'Spusť <code>python3 sprint_data.py</code>, aby export obsahoval názvy issues.'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+elif rc_metrics["count"] == 0:
+    st.markdown(
+        '<div style="background:#ecfdf5;border:1.5px solid #a7f3d0;border-radius:12px;'
+        'padding:1rem 1.2rem;display:flex;align-items:center;gap:.7rem;'
+        'font-size:.92rem;color:#065f46;">'
+        '<span style="font-size:1.3rem;">✅</span>'
+        '<span>Žádné RC bugy v tomto sprintu — release candidate testing běžel hladce.</span>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+else:
+    # ── 3 dlaždice ──
+    rc_share = rc_metrics["share_pct"]
+    rc_color = ("#9a3020" if rc_share >= 25
+                else "#9a6a20" if rc_share >= 15
+                else "#4a8040")
+
+    rc_c1, rc_c2, rc_c3 = st.columns(3)
+    with rc_c1:
+        st.metric("RC bugů", f"{rc_metrics['count']}",
+                  help="Počet bugů s prefixem [RC] v názvu — chyby z release candidate testování.")
+    with rc_c2:
+        st.metric("Hodiny na RC", f"{rc_metrics['hours']:g} h",
+                  help="Suma vykázaných hodin na RC bugy včetně jejich subtasků (total_timespent_h).")
+    with rc_c3:
+        st.metric("% času sprintu", f"{rc_share:g} %",
+                  help=("Podíl RC oprav na celkovém vykázaném čase sprintu. "
+                        "Pod 15 % zdravé, 15–25 % pozor, nad 25 % vážné — "
+                        "kvalita pre-RC vývoje vyžaduje pozornost."))
+
+    # Indikátor pásma
+    band_label = ("Vysoký podíl RC oprav" if rc_share >= 25
+                  else "Střední podíl RC oprav" if rc_share >= 15
+                  else "Zdravý podíl RC oprav")
+    st.markdown(
+        f'<div style="margin:.4rem 0 1rem;display:inline-block;'
+        f'font-size:.74rem;font-family:\'DM Mono\',monospace;color:{rc_color};'
+        f'background:#fffef9;border:1.5px solid {rc_color}33;padding:.22rem .65rem;'
+        f'border-radius:99px;letter-spacing:.04em;">'
+        f'{band_label}</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Tabulka všech RC bugů ──
+    done_kw_rc = ["done", "closed", "resolved", "to release", "to merge"]
+    rc_tbl = rc_metrics["df"].copy()
+
+    cols_show = {}
+    if _rc_id_col      and _rc_id_col      in rc_tbl.columns: cols_show[_rc_id_col]      = "ID"
+    if _rc_summary_col and _rc_summary_col in rc_tbl.columns: cols_show[_rc_summary_col] = "Název"
+    if _rc_status_col  and _rc_status_col  in rc_tbl.columns: cols_show[_rc_status_col]  = "Stav"
+    if _rc_total_col   and _rc_total_col   in rc_tbl.columns: cols_show[_rc_total_col]   = "Vykázáno (h)"
+
+    if cols_show:
+        rc_view = rc_tbl[list(cols_show.keys())].rename(columns=cols_show).copy()
+
+        # Vyřešeno? — odvozený sloupec
+        if "Stav" in rc_view.columns:
+            rc_view["Vyřešeno?"] = rc_view["Stav"].astype(str).str.lower().apply(
+                lambda x: "✅ ano" if any(k in x for k in done_kw_rc) else "⏳ ne"
+            )
+        # Číselný formát
+        if "Vykázáno (h)" in rc_view.columns:
+            rc_view["Vykázáno (h)"] = pd.to_numeric(rc_view["Vykázáno (h)"], errors="coerce").fillna(0).round(1)
+        # Seřadit podle vykázaného času sestupně
+        if "Vykázáno (h)" in rc_view.columns:
+            rc_view = rc_view.sort_values("Vykázáno (h)", ascending=False)
+
+        rc_view = rc_view.fillna("—").astype(str)
+        st.markdown(htable(rc_view), unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────
