@@ -1338,10 +1338,10 @@ def draw_burndown(issues_df, mapping, sprint_start, sprint_end):
             fontfamily="DM Sans",
         )
 
-    # Víkendy — jemné šedé pozadí
+    # Víkendy — jemné šedé pozadí (lehce viditelné, ale nenápadné)
     for d in dates:
         if d.weekday() >= 5:
-            ax.axvspan(d, d + timedelta(days=1), alpha=0.05, color="#8a8375", zorder=0)
+            ax.axvspan(d, d + timedelta(days=1), alpha=0.10, color="#8a8375", zorder=0)
 
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%d.%m"))
     ax.xaxis.set_major_locator(mdates.DayLocator(interval=1))
@@ -2134,10 +2134,6 @@ if not uploaded:
     st.markdown("""
     <div style="text-align:center;margin-bottom:1rem;padding-bottom:1rem;
                 border-bottom:1.5px solid #e8e3d8;">
-      <div style="font-size:.65rem;font-family:'DM Mono',monospace;color:#a39e96;
-                  letter-spacing:.1em;text-transform:uppercase;margin-bottom:.3rem;">
-        Alza.cz · Mobilní aplikace
-      </div>
       <h1 style="font-size:2rem;font-weight:400;color:#2c2922;margin:0;
                  font-family:'DM Serif Display',serif;letter-spacing:-.02em;
                  text-align:center;">
@@ -2182,10 +2178,6 @@ if not uploaded:
 
 st.markdown("""
 <div style="text-align:center;margin-bottom:1.6rem;padding-bottom:1rem;border-bottom:1.5px solid #e8e3d8;">
-  <div style="font-size:.65rem;font-family:'DM Mono',monospace;color:#a39e96;
-              letter-spacing:.1em;text-transform:uppercase;margin-bottom:.3rem;">
-    Alza.cz · Mobilní aplikace
-  </div>
   <h1 style="font-size:2rem;font-weight:400;color:#2c2922;margin:0;
              font-family:'DM Serif Display',serif;letter-spacing:-.02em;
              text-align:center;">
@@ -2254,16 +2246,22 @@ else:
         label_visibility="visible",
     ).strip()
 
-# Manuální potvrzení splnění — uloženo v session_state, drží se přes refreshy.
-# Hodnoty: None | "achieved" | "missed"
-if "goal_status_manual" not in st.session_state:
-    st.session_state["goal_status_manual"] = None
+# Manuální potvrzení splnění — uloženo v session_state per sprint, takže když
+# uživatel nahraje jiný CSV (jiný sprint), volba se neudrží mezi sprinty.
+_goal_sprint_key = (
+    str(_meta.get("id") or _meta.get("name") or "")
+    if _meta else
+    (uploaded.name if uploaded else "default")
+)
+_goal_status_key = f"goal_status_manual::{_goal_sprint_key}"
+if _goal_status_key not in st.session_state:
+    st.session_state[_goal_status_key] = None
 
 # Auto-vyhodnocení z metrik (ponecháváme pro Agile Expert / retro logiku)
 goal_result = assess_sprint_goal(sprint_goal, metrics)
 
 # Manuální stav má prioritu před auto-eval
-manual = st.session_state["goal_status_manual"]
+manual = st.session_state[_goal_status_key]
 
 if sprint_goal:
     # Modifier class pro goal-box podle manuálního výběru
@@ -2296,16 +2294,16 @@ if sprint_goal:
     if manual is None:
         bc1, bc2, _ = st.columns([1, 1, 5])
         with bc1:
-            if st.button("✓ Splněno", key="goal_status_yes", use_container_width=True):
-                st.session_state["goal_status_manual"] = "achieved"
+            if st.button("✓ Splněno", key=f"{_goal_status_key}_yes", use_container_width=True):
+                st.session_state[_goal_status_key] = "achieved"
                 st.rerun()
         with bc2:
-            if st.button("✗ Nesplněno", key="goal_status_no", use_container_width=True):
-                st.session_state["goal_status_manual"] = "missed"
+            if st.button("✗ Nesplněno", key=f"{_goal_status_key}_no", use_container_width=True):
+                st.session_state[_goal_status_key] = "missed"
                 st.rerun()
     else:
-        if st.button("Změnit hodnocení", key="goal_status_reset"):
-            st.session_state["goal_status_manual"] = None
+        if st.button("Změnit hodnocení", key=f"{_goal_status_key}_reset"):
+            st.session_state[_goal_status_key] = None
             st.rerun()
 
 if not sprint_goal:
@@ -2448,6 +2446,14 @@ subtask_flow = compute_subtask_flow(issues_df, mapping)
 if subtask_flow and subtask_flow["states"]:
     st.markdown('<div id="subtask-flow"></div>', unsafe_allow_html=True)
     section("🔄", "Tok subtasků — kde tráví čas")
+    # Mikro-hint: tooltip na segmentech baru (jinak by uživatel netušil, že tam je)
+    st.markdown(
+        '<div style="margin:-.4rem 0 .8rem;font-family:\'DM Mono\',monospace;'
+        'font-size:.7rem;color:#a39e96;letter-spacing:.04em;">'
+        'ⓘ Najeď myší na barevný segment baru pro detail.'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
     sf_n      = subtask_flow["n"]
     sf_total  = subtask_flow["total_h"]
