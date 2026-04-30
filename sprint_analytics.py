@@ -102,13 +102,41 @@ matplotlib.rcParams.update({
     "hatch.linewidth":  1.6,           # tučné šrafovací čáry
     "lines.antialiased": True,
     "patch.antialiased": True,
+    "text.antialiased": True,
     "font.family":      "sans-serif",
     "font.sans-serif":  ["DM Sans", "Helvetica", "Arial", "DejaVu Sans"],
     "font.monospace":   ["DM Mono", "Menlo", "Consolas", "DejaVu Sans Mono"],
-    # Tabular numbers tam, kde to font.feature řeší (matplotlib zatím parciálně)
     "axes.labelweight": "normal",
     "axes.titleweight": "normal",
+    # Klíč: text v SVG = <text> tagy s font-family attr (ne path). Browser pak text
+    # vykresluje vektorově s naším DM Sans z Google Fonts → vždy ostrý.
+    "svg.fonttype":     "none",
 })
+
+
+def render_chart_svg(fig):
+    """Vyrenderuje matplotlib figure jako inline SVG (vektor, ostrý na jakémkoliv zoomu).
+
+    Náhrada za st.pyplot(fig, use_container_width=True), která vykreslí PNG → rozmazané.
+    SVG <text> elementy zdědí DM Sans / DM Mono z page CSS přes svg.fonttype=none.
+    Při chybě SVG renderingu se gracefully fallback na st.pyplot.
+    """
+    import io
+    try:
+        buf = io.StringIO()
+        fig.savefig(buf, format="svg")
+        svg = buf.getvalue()
+        # Strip XML declaration / DOCTYPE — inline SVG nesmí mít <?xml...?>
+        svg = re.sub(r"<\?xml[^?]*\?>\s*", "", svg)
+        svg = re.sub(r"<!DOCTYPE[^>]*>\s*", "", svg)
+        # Force responsive: width 100%, height auto (zachová aspect z viewBox)
+        svg = re.sub(r'<svg([^>]*?)\s+width="[^"]*"', r"<svg\1", svg, count=1)
+        svg = re.sub(r'<svg([^>]*?)\s+height="[^"]*"', r"<svg\1", svg, count=1)
+        svg = svg.replace("<svg ", '<svg style="width:100%;height:auto;display:block;" ', 1)
+        st.markdown(svg, unsafe_allow_html=True)
+    except Exception:
+        # Fallback — kdyby SVG export selhal, raději PNG než rozbitá stránka
+        st.pyplot(fig, use_container_width=True)
 
 # ─────────────────────────────────────────────
 # PALETA
@@ -140,16 +168,21 @@ def chart_setup(ax, fig=None):
     for sp in ax.spines.values():
         sp.set_edgecolor("#e8e3d8")
         sp.set_linewidth(0.8)
-    # Sjednocené fonty — DM Mono pro tick labels (čísla os) + DM Sans pro axis labels
+    # ─── Sjednocený typografický systém pro grafy ───
+    # • Tick labels (čísla na osách)            → DM Sans (žádný slashed-zero)
+    # • Axis labels (popisek osy "STORY POINTS")→ DM Mono UPPERCASE (jako tile labely)
+    # • Chart titles (popisné nadpisy)          → DM Sans
+    # Nastavujeme defaulty; konkrétní volání set_xlabel() s fontfamily= přepíše.
     ax.tick_params(colors="#5c5449", labelsize=9, length=3, width=0.8)
     for label in ax.get_xticklabels() + ax.get_yticklabels():
-        label.set_fontfamily("DM Mono")     # čísla na osách
+        label.set_fontfamily("DM Sans")
         label.set_color("#5c5449")
-    ax.xaxis.label.set_color("#5c5449")
-    ax.xaxis.label.set_fontfamily("DM Sans")
-    ax.yaxis.label.set_color("#5c5449")
-    ax.yaxis.label.set_fontfamily("DM Sans")
-    # Title — pokud někdo nastaví ax.set_title, taky DM Sans
+    ax.xaxis.label.set_color("#a39e96")
+    ax.xaxis.label.set_fontfamily("DM Mono")
+    ax.xaxis.label.set_fontsize(8)
+    ax.yaxis.label.set_color("#a39e96")
+    ax.yaxis.label.set_fontfamily("DM Mono")
+    ax.yaxis.label.set_fontsize(8)
     if ax.title is not None:
         ax.title.set_fontfamily("DM Sans")
         ax.title.set_color("#2c2922")
@@ -243,15 +276,62 @@ section[data-testid="stFileUploader"] > label { display:none!important; }
 .dt td { font-family:'DM Sans',sans-serif!important; }
 /* Tabulka mono hodnoty (ID issues, technické štítky) */
 .dt .mono { font-family:'DM Mono',monospace!important; }
-/* Tabulka čísla — Mono + tabular-nums (desetinné čárky pod sebou) */
-.dt .num {
+/* Tabulka čísla — Mono + tabular-nums (desetinné čárky pod sebou).
+   Třída na <td>, ne na <span>, jinak text-align na inline elementu nefunguje. */
+.dt td.num,
+.dt td.num span {
   font-family:'DM Mono',monospace!important;
   font-variant-numeric:tabular-nums!important;
   font-feature-settings:"tnum"!important;
-  text-align:right!important;
   color:#2c2922!important;
 }
-.dt th.num-h { text-align:right!important; }
+/* Vyšší pravé i levé padding u číselných sloupců, ať se s následujícím sloupcem
+   vizuálně neslepí (typicky pokud po čísle následuje text jako "Vyřešeno?"). */
+.dt td.num,
+.dt th.num-h {
+  text-align:right!important;
+  padding-right:24px!important;
+  padding-left:24px!important;
+}
+/* Status / kompaktní sloupce — centrované místo defaultního left, aby nelepily
+   na předchozí pravo-zarovnaný číselný sloupec. */
+.dt td.center,
+.dt th.center-h {
+  text-align:center!important;
+}
+
+/* ── Karty Tok subtasků (sladěno s hlavními st.metric dlaždicemi) ── */
+.flow-card{
+  flex:1 1 0;min-width:160px;background:#fffef9;
+  border:1.5px solid #e8e3d8;border-radius:14px;
+  padding:1rem 1.1rem 1.2rem;
+  box-shadow:2px 3px 0 #e0dbd2;
+  display:flex;flex-direction:column;align-items:center;text-align:center;
+  overflow:hidden;position:relative;
+}
+.flow-card-label{
+  font-family:'DM Mono',monospace!important;
+  font-size:.68rem!important;color:#a39e96!important;
+  text-transform:uppercase!important;letter-spacing:.07em!important;
+  margin-bottom:.45rem;
+}
+.flow-card-value{
+  font-family:'DM Serif Display',serif!important;
+  font-size:1.8rem!important;color:#2c2922!important;font-weight:500!important;
+  line-height:1.1;font-variant-numeric:tabular-nums!important;
+  font-feature-settings:"tnum"!important;
+  margin:.1rem 0;
+}
+.flow-card-unit{
+  font-family:'DM Mono',monospace!important;
+  font-size:.7rem!important;color:#a39e96!important;
+  margin-left:.25rem;font-weight:400!important;
+}
+.flow-card-sub{
+  font-family:'DM Mono',monospace!important;
+  font-size:.7rem!important;color:#a39e96!important;
+}
+.flow-card-strip{position:absolute;left:0;right:0;bottom:0;height:6px;}
 
 /* ── Alerts & expanders ── */
 div[data-testid="stAlert"]{
@@ -262,32 +342,49 @@ div[data-testid="stAlert"]{
 }
 [data-testid="stExpander"] summary{color:#2c2922!important}
 
-/* ── Streamlit native metriky ── */
+/* ── Streamlit native metriky — všechno vycentrované ── */
 [data-testid="stMetric"]{
   background:#fffef9!important;border:1.5px solid #e8e3d8!important;
   border-radius:14px!important;padding:1rem 1.1rem!important;
   box-shadow:2px 3px 0 #e0dbd2!important;
+  text-align:center!important;
 }
-[data-testid="stMetricValue"]{
+/* Hlavní číslo v dlaždici — sjednoceno s tabulkou SP rozpadu (1.8rem / 500 / Serif) */
+[data-testid="stMetricValue"],
+[data-testid="stMetricValue"] *{
   font-family:'DM Serif Display',serif!important;
-  font-size:1.7rem!important;color:#2c2922!important;
+  font-size:1.8rem!important;color:#2c2922!important;
+  font-weight:500!important;
+  line-height:1.1!important;
+  margin:.25rem 0 .1rem!important;
   font-variant-numeric:tabular-nums!important;
   font-feature-settings:"tnum"!important;
+  justify-content:center!important;
 }
 [data-testid="stMetricLabel"]{
   font-family:'DM Mono',monospace!important;font-size:.68rem!important;
   text-transform:uppercase!important;letter-spacing:.07em!important;color:#a39e96!important;
+  justify-content:center!important;
 }
-[data-testid="stMetricDelta"]{ display:none!important; }
+/* Delta = sub-text (např. "1 z 45 issues · 0 z 68 SP") — drobně, šedě, mono */
+[data-testid="stMetricDelta"]{
+  font-family:'DM Mono',monospace!important;
+  font-size:.7rem!important;color:#a39e96!important;
+  justify-content:center!important;
+  text-align:center!important;
+}
+[data-testid="stMetricDelta"] svg{ display:none!important; }   /* ↑↓ šipka pryč */
 
 /* ── Metriky: tooltip vedle nadpisu na stejném řádku ──  */
 [data-testid="stMetricLabel"] {
   display:flex!important;flex-direction:row!important;
   align-items:center!important;gap:4px!important;flex-wrap:nowrap!important;
+  justify-content:center!important;
 }
 [data-testid="stMetricLabel"] > div {
   display:flex!important;flex-direction:row!important;
   align-items:center!important;gap:4px!important;
+  justify-content:center!important;
 }
 [data-testid="stMetricLabel"] [data-testid="stTooltipHoverTarget"] {
   width:14px!important;height:14px!important;
@@ -315,6 +412,33 @@ div[data-testid="stAlert"]{
 .goal-box{
   background:#fffef9;border:2px solid #93c5fd;border-radius:16px;
   padding:1.2rem 1.5rem;margin-bottom:1.5rem;box-shadow:3px 4px 0 #c7dff9;
+  transition:border-color .2s, box-shadow .2s;
+}
+/* Po manuálním označení v retru — zelený / červený rámec a stín */
+.goal-box.is-achieved{
+  border-color:#86efac;box-shadow:3px 4px 0 #bbf7d0, 0 0 0 4px rgba(134,239,172,.18);
+}
+.goal-box.is-missed{
+  border-color:#fca5a5;box-shadow:3px 4px 0 #fecaca, 0 0 0 4px rgba(252,165,165,.18);
+}
+/* ── Streamlit buttons — warm cream theme (přebíjíme black/inverted defaultní) ── */
+.stButton > button,
+[data-testid="stBaseButton-secondary"]{
+  background:#fffef9!important;color:#2c2922!important;
+  border:1.5px solid #e8e3d8!important;border-radius:10px!important;
+  font-family:'DM Sans',sans-serif!important;font-weight:500!important;
+  box-shadow:2px 3px 0 #e0dbd2!important;
+  transition:transform .1s, box-shadow .1s, background .15s!important;
+}
+.stButton > button:hover,
+[data-testid="stBaseButton-secondary"]:hover{
+  background:#fdfbf3!important;color:#2c2922!important;
+  border-color:#d6cfbf!important;
+  transform:translate(1px,1px)!important;box-shadow:1px 2px 0 #e0dbd2!important;
+}
+.stButton > button:active,
+[data-testid="stBaseButton-secondary"]:active{
+  transform:translate(2px,3px)!important;box-shadow:none!important;
 }
 .goal-label{
   font-size:.65rem;font-weight:500;letter-spacing:.1em;text-transform:uppercase;
@@ -331,9 +455,9 @@ div[data-testid="stAlert"]{
   margin:2.5rem 0 1.1rem;padding-bottom:.9rem;border-bottom:1.5px solid #e8e3d8;
 }
 .sec-icon{
-  width:36px;height:36px;background:#f0ede6;border-radius:9px;
   display:flex;align-items:center;justify-content:center;
-  font-size:17px;border:1px solid #e0dbd2;
+  font-size:22px;line-height:1;
+  width:36px;height:36px;
 }
 .sec-ttl{
   font-size:1.15rem;font-weight:400;color:#2c2922!important;
@@ -546,20 +670,26 @@ def htable(df, spillover_ids=None, avg_label="— průměr"):
 
     # Auto-detekce numerických sloupců — buď přes dtype, nebo pokud jsou hodnoty
     # parsovatelné na float u většiny řádků (≥ 70 %), bereme to jako číselný sloupec.
+    # Heuristika: "5 SP", "1035.2h", "2.03× průměru", "20 %" — všechno ber jako numeric.
+    # Klíč: vezmi PRVNÍ token (číslo s případnou koncovkou h/%) a zkus ho parsovat.
     import numbers
+    _num_first_token = re.compile(r"^[+\-]?\d+(?:[.,]\d+)?")
     def _is_numlike_str(s):
-        try:
-            float(str(s).replace(",", ".").replace(" ", "").rstrip("%h"))
-            return True
-        except Exception:
+        sv = str(s).strip()
+        if not sv or sv == "—":
             return False
+        return _num_first_token.match(sv) is not None
+
+    # Sloupce, které centrujeme (kompaktní status-y — nehodí se levo, neskáčou s číselným
+    # sloupcem nalevo do nečitelné stěny).
+    center_cols = {"Stav", "Status", "Vyřešeno?", "Mid-sprint"}
 
     numeric_cols = set()
     for col in df.columns:
         col_str = str(col)
         # textové výjimky — i když by to vypadalo numericky, držíme jako text
         if col_str in ("Issue", "ID", "Stav", "Status", "Typ", "Type", "Název", "Name",
-                       "Vyřešeno?", "Přidáno", "Sprint"):
+                       "Vyřešeno?", "Přidáno", "Sprint", "Mid-sprint"):
             continue
         ser = df[col]
         if pd.api.types.is_numeric_dtype(ser):
@@ -570,11 +700,17 @@ def htable(df, spillover_ids=None, avg_label="— průměr"):
         if sample and sum(1 for v in sample if _is_numlike_str(v)) / len(sample) >= 0.7:
             numeric_cols.add(col_str)
 
-    # Header — pravé zarovnání u číselných sloupců
+    # Header — pravé zarovnání u číselných sloupců, centrované u status sloupců
     header_cells = []
     for c in df.columns:
-        cls = " class='num-h'" if str(c) in numeric_cols else ""
-        header_cells.append(f"<th{cls}>{hl.escape(str(c))}</th>")
+        cs = str(c)
+        if cs in numeric_cols:
+            cls = " class='num-h'"
+        elif cs in center_cols:
+            cls = " class='center-h'"
+        else:
+            cls = ""
+        header_cells.append(f"<th{cls}>{hl.escape(cs)}</th>")
     headers = "".join(header_cells)
 
     rows = ""
@@ -594,9 +730,11 @@ def htable(df, spillover_ids=None, avg_label="— průměr"):
                 sc = ("s-done" if any(k in sv.lower() for k in ["done", "closed", "resolved"])
                       else ("s-active" if any(k in sv.lower() for k in ["progress", "review", "testing"])
                             else "s-todo"))
-                cells += f"<td><span class='{sc}'>{hl.escape(sv)}</span></td>"
+                cells += f"<td class='center'><span class='{sc}'>{hl.escape(sv)}</span></td>"
             elif cn in numeric_cols:
-                cells += f"<td><span class='num'>{hl.escape(sv)}</span></td>"
+                cells += f"<td class='num'>{hl.escape(sv)}</td>"
+            elif cn in center_cols:
+                cells += f"<td class='center'>{hl.escape(sv)}</td>"
             else:
                 cells += f"<td>{hl.escape(sv)}</td>"
         rows += f"<tr{cls}>{cells}</tr>"
@@ -609,6 +747,44 @@ def section(icon, title):
         f"<div class='sec-ttl'>{title}</div></div>",
         unsafe_allow_html=True,
     )
+
+
+def htable_paged(df, key, max_rows=5, **kwargs):
+    """Vyrenderuje htable() s pagination — defaultně prvních max_rows řádků,
+    pod nimi "Zobrazit dalších X" / "Skrýt" tlačítko.
+
+    Pokud má df ≤ max_rows řádků, button se nezobrazí (jen čistá tabulka).
+
+    Argumenty:
+      df       — DataFrame k renderu
+      key      — unikátní klíč pro session state (typicky název sekce)
+      max_rows — kolik řádků zobrazit defaultně (default 5)
+      kwargs   — další argumenty propagované do htable() (např. spillover_ids, avg_label)
+    """
+    total = len(df)
+    if total == 0:
+        return
+    if total <= max_rows:
+        st.markdown(htable(df, **kwargs), unsafe_allow_html=True)
+        return
+
+    state_key = f"htable_show_all__{key}"
+    if state_key not in st.session_state:
+        st.session_state[state_key] = False
+    show_all = st.session_state[state_key]
+
+    df_show = df if show_all else df.head(max_rows)
+    st.markdown(htable(df_show, **kwargs), unsafe_allow_html=True)
+
+    remaining = total - max_rows
+    if not show_all:
+        if st.button(f"Zobrazit dalších {remaining}", key=f"{state_key}_btn"):
+            st.session_state[state_key] = True
+            st.rerun()
+    else:
+        if st.button("Skrýt", key=f"{state_key}_btn"):
+            st.session_state[state_key] = False
+            st.rerun()
 
 
 # ─────────────────────────────────────────────
@@ -987,9 +1163,14 @@ def compute_subtask_flow(df, mapping):
     grand_total = 0.0
     for k, lbl, c in cols:
         scaled = active[c] * active["_scale"]
+        # Median jen z non-zero hodnot — "kolik to trvá, když k tomu fakt dojde".
+        # Subtasky, které stavem vůbec neprošly (0h), median nezkresluje.
+        nonzero = scaled[scaled > 0]
+        median_nz = float(nonzero.median()) if len(nonzero) > 0 else 0.0
         out_states.append({
             "key": k, "label": lbl,
-            "median": round(float(scaled.median()), 1),
+            "median": round(median_nz, 1),
+            "n_nonzero": int(len(nonzero)),
             "sum_h": float(scaled.sum()),
         })
         grand_total += float(scaled.sum())
@@ -1164,22 +1345,20 @@ def draw_burndown(issues_df, mapping, sprint_start, sprint_end):
 
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%d.%m"))
     ax.xaxis.set_major_locator(mdates.DayLocator(interval=1))
-    ax.set_ylabel("Story points", color="#a39e96", fontsize=9)
     ax.set_xlim(sprint_start, sprint_end)
     ax.set_ylim(0, total_sp * 1.12)
     ax.tick_params(colors="#5c5449", labelsize=9, length=3, width=0.8)
-    for label in ax.get_xticklabels():
-        label.set_fontfamily("DM Sans")
-        label.set_color("#5c5449")
-    for label in ax.get_yticklabels():
+    # Sjednoceno s chart_setup() — tick labely v DM Sans (čísla bez slashed-zero).
+    for label in ax.get_xticklabels() + ax.get_yticklabels():
         label.set_fontfamily("DM Sans")
         label.set_color("#5c5449")
     plt.xticks(rotation=35, ha="right")
-    ax.set_ylabel("Story points", color="#5c5449", fontsize=9,
-                  fontfamily="DM Mono")
+    # Popisek osy ve stylu dlaždicových labelů (DM Mono uppercase, šedý)
+    ax.set_ylabel("STORY POINTS", color="#a39e96", fontsize=8,
+                  fontfamily="DM Mono", labelpad=10)
     ax.legend(loc="upper right", frameon=True, facecolor="#fffef9",
               edgecolor="#e8e3d8", labelcolor="#5c5449", fontsize=9,
-              prop={"family": "DM Mono"}, framealpha=0.95)
+              prop={"family": "DM Sans"}, framealpha=0.95)
     plt.tight_layout(pad=0.6)
 
     if not actual:
@@ -1200,59 +1379,71 @@ def draw_burndown(issues_df, mapping, sprint_start, sprint_end):
 # ─────────────────────────────────────────────
 
 def draw_time_by_type(df, mapping):
+    """Elegantní donut chart + data pro side panel.
+
+    Vrací (fig, stats) kde stats = list dict[{label, hours, pct, color}].
+    Vyrenderování side panelu řeší volající kód v HTML — takhle máme čistý
+    chart bez vestavěné legendy (méně bordelu, víc vzduchu).
+    """
     type_col = mapping.get("type")
     id_col   = mapping.get("id", df.columns[0])
     tc = [mapping.get(k) for k in
           ["time_todo","time_progress","time_review","time_testing","time_blocked"]
           if mapping.get(k) and mapping.get(k) in df.columns]
     if not type_col or not tc:
-        return None
+        return None, None
 
     uniq = df.groupby(id_col).first().reset_index()
     uniq["_total_h"] = sum(pd.to_numeric(uniq[c], errors="coerce").fillna(0) for c in tc)
     by_type = uniq.groupby(type_col)["_total_h"].sum().reset_index()
     by_type = by_type[by_type["_total_h"] > 0]
     if by_type.empty:
-        return None
+        return None, None
 
     # Teplá pastelová paleta bez šrafování
-    WARM_PIE = {"Story": "#c07860", "Bug": "#e8c4b0", "Bug Subtask": "#d4a898", "BugSubtask": "#d4a898", "Sub-task": "#d4cfc6"}
+    WARM_PIE = {"Story": "#c07860", "Bug": "#e8c4b0", "Bug Subtask": "#d4a898",
+                "BugSubtask": "#d4a898", "Sub-task": "#d4cfc6"}
     pie_colors = [WARM_PIE.get(t, "#d4cfc6") for t in by_type[type_col]]
-    total_h    = by_type["_total_h"].sum()
+    total_h    = float(by_type["_total_h"].sum())
 
-    fig, ax = plt.subplots(figsize=(5.5, 4.4), dpi=180)
+    # Kompaktnější donut — místo full width 11x6.5 → square 4.6x4.6
+    fig, ax = plt.subplots(figsize=(4.6, 4.6), dpi=180)
     fig.patch.set_facecolor("#fffef9")
     ax.set_facecolor("#fffef9")
 
-    wedges, _, autotexts = ax.pie(
+    # Donut s větší dírou (0.62) → víc prostoru pro center text + elegantnější
+    ax.pie(
         by_type["_total_h"],
         labels=None,
         colors=pie_colors,
-        autopct=lambda p: f"{p:.0f}%",
         startangle=90,
-        pctdistance=0.72,
-        wedgeprops={"edgecolor": "#fffef9", "linewidth": 2.5},
+        wedgeprops={"edgecolor": "#fffef9", "linewidth": 2.5, "width": 0.38},
     )
-    for at in autotexts:
-        at.set_fontsize(11)
-        at.set_fontweight("bold")
-        at.set_color("#fffef9")
-        at.set_fontfamily("DM Sans")
 
-    # Střed — serif font pro číslo, mono pro popisek
-    ax.text(0,  0.08, f"{total_h:.0f}h", ha="center", va="center",
-            fontsize=15, fontweight="bold", color="#2c2922",
-            fontfamily="DM Sans")
-    ax.text(0, -0.18, "celkem", ha="center", va="center",
-            fontsize=8.5, color="#a39e96", fontfamily="DM Mono")
+    # Velký středový display — celkem hodin (Serif Display)
+    ax.text(0,  0.08, f"{total_h:.0f} h", ha="center", va="center",
+            fontsize=22, fontweight="medium", color="#2c2922",
+            fontfamily="DM Serif Display")
+    ax.text(0, -0.20, "C E L K E M", ha="center", va="center",
+            fontsize=8, color="#a39e96", fontfamily="DM Mono")
+    ax.set(aspect="equal")
 
-    legend_labels = [f"{row[type_col]}  {row['_total_h']:.0f}h" for _, row in by_type.iterrows()]
-    ax.legend(wedges, legend_labels, loc="lower center",
-              bbox_to_anchor=(0.5, -0.1), ncol=len(by_type),
-              frameon=False, fontsize=9, labelcolor="#5c5449",
-              prop={"family": "DM Mono"})
-    plt.tight_layout(pad=0.3)
-    return fig
+    # Stats list pro side panel
+    stats = []
+    for _, row in by_type.iterrows():
+        label = str(row[type_col])
+        hours = float(row["_total_h"])
+        stats.append({
+            "label": label,
+            "hours": hours,
+            "pct":   (hours / total_h * 100) if total_h > 0 else 0,
+            "color": WARM_PIE.get(label, "#d4cfc6"),
+        })
+    # Seřaď podle hodin sestupně
+    stats.sort(key=lambda s: s["hours"], reverse=True)
+
+    plt.tight_layout(pad=0.1)
+    return fig, stats
 
 
 # ─────────────────────────────────────────────
@@ -1303,7 +1494,7 @@ def draw_unplanned_work(df, mapping):
     ax.set_xticks([])
     ax.legend(loc="lower center", bbox_to_anchor=(0.5, -0.8), ncol=2,
               frameon=False, fontsize=9, labelcolor="#5c5449",
-              prop={"family": "DM Mono"})
+              prop={"family": "DM Sans"})
     plt.tight_layout(pad=0.2)
     return fig
 
@@ -1358,8 +1549,8 @@ def draw_estimation_by_sp(df, mapping):
                  fontfamily="DM Sans")
     ax1.set_xticks(x1)
     ax1.set_xticklabels([f"{int(s)} SP" for s in sp_vals], fontfamily="DM Sans")
-    ax1.set_ylabel("Průměr hodin", color="#5c5449", fontsize=9, fontfamily="DM Mono")
-    ax1.set_title("Průměrný vykázaný čas na SP", fontsize=10, color="#2c2922", pad=10, fontfamily="DM Mono")
+    ax1.set_ylabel("PRŮMĚR HODIN", color="#a39e96", fontsize=8, fontfamily="DM Mono", labelpad=10)
+    ax1.set_title("Průměrný vykázaný čas na SP", fontsize=10, color="#2c2922", pad=10, fontfamily="DM Sans")
 
     # Pravý — odchylka od průměru
     def _color(r):
@@ -1379,8 +1570,8 @@ def draw_estimation_by_sp(df, mapping):
     ax2.axhline(y=-30, color=PASTEL["green"],  linewidth=0.9, linestyle="--")
     ax2.set_xticks(x2)
     ax2.set_xticklabels(uniq[id_col].tolist(), rotation=40, ha="right", fontsize=7.5, fontfamily="DM Mono")
-    ax2.set_ylabel("Odchylka od průměru SP (%)", color="#5c5449", fontsize=9, fontfamily="DM Mono")
-    ax2.set_title("Nad/podhodnocení vs. průměr pro dané SP", fontsize=10, color="#2c2922", pad=10, fontfamily="DM Mono")
+    ax2.set_ylabel("ODCHYLKA OD PRŮMĚRU SP (%)", color="#a39e96", fontsize=8, fontfamily="DM Mono", labelpad=10)
+    ax2.set_title("Nad/podhodnocení vs. průměr pro dané SP", fontsize=10, color="#2c2922", pad=10, fontfamily="DM Sans")
 
     legend_elements = [
         mpatches.Patch(facecolor="#f5c4b0", edgecolor="none", label="> 130% průměru"),
@@ -1390,7 +1581,7 @@ def draw_estimation_by_sp(df, mapping):
     ]
     ax2.legend(handles=legend_elements, loc="upper right", frameon=True,
                facecolor="#fffef9", edgecolor="#e8e3d8", fontsize=8, labelcolor="#5c5449",
-               prop={"family": "DM Mono"})
+               prop={"family": "DM Sans"})
     plt.tight_layout(pad=0.6)
 
     over = uniq[uniq["_ratio"] > 1.3][[id_col, "_sp", "_h", "_ratio"]].copy()
@@ -1478,7 +1669,7 @@ def draw_flow_state_cards(df, mapping):
         val_str = f"{days}" if days is not None else "—"
         ax.text(0.5, 0.52, val_str, ha="center", va="center",
                 fontsize=30, color="#2c2922",
-                fontfamily="DM Sans", transform=ax.transAxes)
+                fontfamily="DM Serif Display", transform=ax.transAxes)
         ax.text(0.5, 0.18, "dní průměrně", ha="center", va="center",
                 fontsize=8, color="#a39e96", transform=ax.transAxes)
 
@@ -1495,119 +1686,208 @@ def draw_flow_state_cards(df, mapping):
 # ─────────────────────────────────────────────
 
 def agile_expert_analysis(metrics, outlier_ids, sprint_goal, goal_result, mapping):
+    """Generuje observations + actions striktně z reálných čísel sprintu.
+
+    Pravidla:
+      • každý titulek obsahuje konkrétní hodnotu z metrik
+      • každá akce má konkrétní cílový NUMBER (ne "snížit o 10–15 %", ale
+        "sníž commit z 68 na 58 SP")
+      • bez "generic best-practices" textu, který by se objevil i bez dat
+    """
     sr  = metrics.get("spillover_rate", 0)
     cd  = metrics.get("commit_done_ratio", 100)
     dr  = metrics.get("defect_rate", 0)
     bs_open     = metrics.get("defect_open", 0)
-    # Po Fix #5: handoff_rate_pct počítáme z top-level Story/Bug a jen reálné re-assigns.
     handoff_pct = int(metrics.get("handoff_rate_pct", 0))
+    handoff_n   = metrics.get("issues_with_handoff", 0)
+    handoff_total = metrics.get("top_level_total", 0)
+    planned_sp     = float(metrics.get("planned_sp", 0))
+    delivered_sp   = float(metrics.get("delivered_sp", 0))
+    spillover_sp   = float(metrics.get("spillover_sp", 0))
+    velocity_st    = float(metrics.get("velocity_stories", 0))
+    bug_capacity   = float(metrics.get("bug_capacity", 0))
+    bug_share_pct  = float(metrics.get("bug_share_pct", 0))
+    defect_count   = int(metrics.get("defect_count", 0))
+    story_sp       = float(metrics.get("stories_planned", 0))
+    rc_count_m     = int(metrics.get("rc_count", 0))
+    rc_hours_m     = float(metrics.get("rc_hours", 0))
+    rc_share_m     = float(metrics.get("rc_share_pct", 0))
+    mid_count      = int(metrics.get("mid_sprint_count", 0))
+    scope_pct_m    = float(metrics.get("scope_creep_pct", 0))
 
     observations = []
     actions      = []
     stat_review  = []
 
-    # Sprint goal
+    # ── Sprint goal ────────────────────────────────────────────────────────────
     if not sprint_goal:
         observations.append({"type":"bad",
             "title":"Cíl sprintu není zadán",
-            "detail":"Bez sprint goal nevíme zda sprint uspěl. Data říkají čísla, ale ne zda tým dosáhl toho, na čem záleží."})
-        actions.append({"akce":"Vždy zadej sprint goal před začátkem sprintu",
-            "meritko":"Cíl: každý sprint má jasný, měřitelný goal",
-            "kdy":"Sprint planning"})
+            "detail":"Bez sprint goal neumíme posoudit úspěch. Doplň cíl v JIŘE před startem příštího sprintu."})
     elif goal_result:
         status, _label = goal_result
         if status == "missed":
             observations.append({"type":"bad",
                 "title":"Sprint goal pravděpodobně nesplněn",
-                "detail":f'"{sprint_goal}" — spillover {sr}% a commit/done {cd}% naznačují nesplnění. Ověř na sprint review.'})
+                "detail":(f"Spillover {sr:g} % a Commit/Done {cd:g} % naznačují nesplnění. "
+                          f"Z {planned_sp:g} plánovaných SP doděláno {delivered_sp:g} SP "
+                          f"({spillover_sp:g} SP přepadlo). Potvrď na review.")})
         elif status == "partial":
             observations.append({"type":"warn",
                 "title":"Sprint goal částečně splněn",
-                "detail":f'"{sprint_goal}" — {sr}% spillover snižuje pravděpodobnost plného splnění.'})
+                "detail":(f"Z {planned_sp:g} plánovaných SP doděláno {delivered_sp:g} SP "
+                          f"({sr:g} % spillover). Ověř, jestli to ovlivnilo odrážky goalu.")})
         else:
             observations.append({"type":"good",
                 "title":"Sprint goal pravděpodobně splněn",
-                "detail":f'"{sprint_goal}" — metriky naznačují úspěšný sprint. Ověř na review.'})
+                "detail":(f"Dodáno {delivered_sp:g}/{planned_sp:g} SP ({100-sr:g} %). "
+                          "Ověř konkrétní splnění odrážek na review.")})
 
-    # Spillover
-    if sr <= 10:
-        observations.append({"type":"good",
-            "title":f"Spillover {sr}% — realistické plánování",
-            "detail":"Nízký spillover = tým commituje co dokáže dokončit. Dobrá předpověditelnost."})
-    elif sr <= 25:
-        observations.append({"type":"warn",
-            "title":f"Spillover {sr}% — mírné přeplánování",
-            "detail":"Zkus zredukovat commitment o 10–15% v příštím sprintu."})
-        actions.append({"akce":"Redukuj sprint commitment o 10–15%",
-            "meritko":f"Cíl: spillover pod 10% (aktuálně {sr}%)",
-            "kdy":"Příští sprint planning"})
-    else:
-        observations.append({"type":"bad",
-            "title":f"Spillover {sr}% — systemický problém",
-            "detail":"Přes čtvrtinu sprintu se přesouvá dál. Přeplánování, blokery, nebo neplánovaná práce."})
-        actions.append({"akce":"Redukuj commitment o 20% a přidej buffer na neplánovanou práci",
-            "meritko":f"Cíl: spillover pod 15% (aktuálně {sr}%)",
-            "kdy":"Ihned"})
+    # ── Plán vs Dodáno (SP-based spillover) ────────────────────────────────────
+    if planned_sp > 0:
+        if sr <= 10:
+            observations.append({"type":"good",
+                "title":f"Spillover {sr:g} % — realistické plánování",
+                "detail":(f"Z {planned_sp:g} SP plánu doděláno {delivered_sp:g} SP, "
+                          f"přepadlo {spillover_sp:g} SP. Tým commituje co dokáže.")})
+        elif sr <= 25:
+            target_sp = max(1, round(delivered_sp + (planned_sp - delivered_sp) * 0.3))
+            observations.append({"type":"warn",
+                "title":f"Spillover {sr:g} % — mírné přeplánování ({spillover_sp:g} SP přepadlo)",
+                "detail":(f"Plán {planned_sp:g} SP, dodáno {delivered_sp:g} SP. "
+                          "Realistický commit by ležel mezi dodáním a plánem.")})
+            actions.append({
+                "akce": f"V příštím sprintu commit cca {target_sp} SP místo {planned_sp:g} SP",
+                "meritko": f"Cíl: spillover pod 10 % (aktuálně {sr:g} %)",
+                "kdy": "Sprint planning"})
+        else:
+            target_sp = max(1, round(delivered_sp * 1.05))
+            observations.append({"type":"bad",
+                "title":f"Spillover {sr:g} % — vážný problém ({spillover_sp:g} SP přepadlo)",
+                "detail":(f"Plán {planned_sp:g} SP, dodáno jen {delivered_sp:g} SP. "
+                          "Přeplánování, blokery, nebo neplánovaná práce.")})
+            actions.append({
+                "akce": f"Drasticky snížit commit na ~{target_sp} SP (= dodáno+5 %) a přidat buffer",
+                "meritko": f"Cíl: spillover pod 15 % (aktuálně {sr:g} %)",
+                "kdy": "Ihned, nejpozději příští planning"})
 
-    # Cycle time / Lead time vědomě nezahrnujeme — backlog je připravený měsíce dopředu,
-    # takže "čas od vytvoření" neměří výkon týmu, ale plánovací horizont PO.
-    # Práce navíc teče přes subtasky (top-level Story zůstává v TODO),
-    # takže cycle time na úrovni Story by stejně nereflektoval realitu.
+    # ── Bug Capacity — kolik kapacity sežere údržba ────────────────────────────
+    if delivered_sp > 0 and (velocity_st + bug_capacity) > 0:
+        if bug_share_pct >= 35:
+            observations.append({"type":"warn",
+                "title":f"Bug Capacity {bug_capacity:g} SP — bugy spotřebovaly {bug_share_pct:g} % kapacity",
+                "detail":(f"Z {velocity_st + bug_capacity:g} dodaných SP šlo {bug_capacity:g} SP "
+                          f"na opravy bugů. Velký technický dluh — méně času na features.")})
+            actions.append({
+                "akce": f"Sníž poměr Bug:Story ze {bug_share_pct:g} % na ≤ 20 %",
+                "meritko": f"Cíl: max ~{round((velocity_st + bug_capacity) * 0.20)} SP na bugy / sprint",
+                "kdy": "Příští refinement (priorita Story)"})
 
-    # Flow Efficiency vědomě vyhozeno — pro tým s prací přes subtasky a velkou QA fází
-    # je metrika zavádějící. Místo ní používáme sekci "Tok subtasků".
-
-    # Defect rate — chybovost nových features (normalizováno na Story SP)
-    if dr > 0:
-        story_sp = metrics.get('stories_planned', 0)
-        defc     = metrics.get('defect_count', 0)
+    # ── Defect Rate — chybovost nových features ────────────────────────────────
+    if dr > 0 and story_sp > 0:
         if dr <= 50:
             observations.append({"type":"good",
-                "title":f"Defect Rate {dr:.0f}% — zdravá kvalita",
-                "detail":f"{defc} BugSubtask na {story_sp:g} Story SP. Pod 50 % = méně než 1 chyba na 2 SP nového kódu."})
+                "title":f"Defect Rate {dr:.0f} % — zdravá kvalita features",
+                "detail":(f"{defect_count} BugSubtasků na {story_sp:g} Story SP "
+                          f"= 1 chyba na {(story_sp/defect_count if defect_count else 0):.1f} SP. "
+                          "Pod 50 % = OK.")})
         elif dr <= 100:
+            target_bs = max(0, int(round(story_sp * 0.5)) - 1)
             observations.append({"type":"warn",
-                "title":f"Defect Rate {dr:.0f}% — zvýšená chybovost features",
-                "detail":f"V průměru {dr/100:.1f} chyby na 1 SP. Více pair programmingu, code review nebo přísnější DoD."})
-            actions.append({"akce":"Přidej do DoD: story se zavírá až s nulovými otevřenými bug subtasky",
-                "meritko":f"Cíl: Defect Rate pod 50 % (aktuálně {dr:.0f}%)",
-                "kdy":"Příští sprint"})
+                "title":f"Defect Rate {dr:.0f} % — chybovost roste",
+                "detail":(f"{defect_count} chyb na {story_sp:g} Story SP "
+                          f"= {dr/100:.2f} chyby na 1 SP nového kódu.")})
+            actions.append({
+                "akce": "Přidej do DoD: story se zavře jen s nulovými otevřenými BugSubtasky",
+                "meritko": f"Cíl: max {target_bs} BugSubtasků za sprint (aktuálně {defect_count})",
+                "kdy": "Refinement DoD review"})
         else:
+            target_bs = max(0, int(round(story_sp * 0.5)))
             observations.append({"type":"bad",
-                "title":f"Defect Rate {dr:.0f}% — vysoká chybovost",
-                "detail":f"Víc chyb než SP nového kódu ({defc} BugSubtask na {story_sp:g} SP). Zásadní kvalitativní problém — diskutuj DoD a coverage."})
+                "title":f"Defect Rate {dr:.0f} % — kvalita kritická",
+                "detail":(f"{defect_count} chyb na {story_sp:g} Story SP — víc chyb než nového "
+                          "kódu. Zásadní problém s testovacím pokrytím nebo refinementem.")})
+            actions.append({
+                "akce": "Pair programming na všechny Story 5+ SP a 100% review novější code base",
+                "meritko": f"Cíl: snížit z {defect_count} na ≤ {target_bs} BugSubtasků",
+                "kdy": "Příští sprint"})
 
+    # ── Otevřené BugSubtasky na konci sprintu ──────────────────────────────────
     if bs_open > 0:
         observations.append({"type":"warn",
-            "title":f"{bs_open} chyb z testování neuzavřených",
-            "detail":"Chyby nalezené při testování nových features nebyly opraveny v rámci sprintu. Přecházejí jako technický dluh."})
-        actions.append({"akce":"Pravidlo: oprava chyby z testování = součást DoD dané story",
-            "meritko":"Cíl: 0 otevřených bug subtasků na konci sprintu",
-            "kdy":"Příští sprint"})
+            "title":f"{bs_open} BugSubtasků z testování neuzavřených",
+            "detail":(f"{bs_open} z {defect_count} chyb se přesouvá do dalšího sprintu jako "
+                      "technický dluh.")})
+        actions.append({
+            "akce": "DoD pravidlo: story se neuzavírá s otevřeným BugSubtaskem",
+            "meritko": f"Cíl: 0 otevřených (aktuálně {bs_open})",
+            "kdy": "Příští sprint"})
 
-    # Předávání issues
-    if handoff_pct > 30:
-        observations.append({"type":"warn",
-            "title":f"{handoff_pct}% issues měnilo řešitele",
-            "detail":"Každé předání prodlužuje cycle time. Nejasné ownership při planningu."})
-        actions.append({"akce":"Přiřaď issues stabilně na začátku sprintu",
-            "meritko":f"Cíl: pod 15% předaných issues (aktuálně {handoff_pct}%)",
-            "kdy":"Sprint planning"})
-
-    # Outliery
+    # ── Předávání issues — záměrně NEzobrazujeme. V týmu se na issues podílí různé
+    # role (dev, QA, design), takže reassign je standard a ne signál problému. ─
+    # ── Outliery v odhadu (z Estimation per SP grafu) ──────────────────────────
     if outlier_ids:
+        ids_text = ", ".join(outlier_ids[:5])
+        more = (f" + {len(outlier_ids) - 5} dalších" if len(outlier_ids) > 5 else "")
         observations.append({"type":"warn",
-            "title":f"{len(outlier_ids)} outlier issues — výrazně nad průměrem",
-            "detail":f"Issues {', '.join(outlier_ids[:3])} trvaly výrazně déle. Hledejte společného jmenovatele."})
+            "title":f"{len(outlier_ids)} issues výrazně nad průměrem pro dané SP",
+            "detail":(f"Konkrétně: {ids_text}{more}. Trvaly přes 130 % průměrného času "
+                      "pro stejný SP odhad. Najdi společný jmenovatel (tech dluh, blokery, "
+                      "nedostatečný refinement).")})
+        actions.append({
+            "akce": "Retro téma: probrat každý outlier — proč trval déle než běžné SP",
+            "meritko": f"Cíl: pochopit příčinu u všech {len(outlier_ids)} issues",
+            "kdy": "Retrospektiva"})
 
+    # ── Scope creep (mid-sprint additions) ─────────────────────────────────────
+    if mid_count > 0:
+        if scope_pct_m >= 20:
+            observations.append({"type":"bad",
+                "title":f"Scope creep {scope_pct_m:g} % — {mid_count} top-level přidáno během sprintu",
+                "detail":("Zásadní rozšíření plánu během sprintu. Sprint commitment není stabilní, "
+                          "horší předpověditelnost dodávek.")})
+            actions.append({
+                "akce": "Zaveď pravidlo: nové issues do sprintu jen po explicitní výměně (out 1, in 1 SP)",
+                "meritko": f"Cíl: pod 10 % scope creep (aktuálně {scope_pct_m:g} %, {mid_count} ks)",
+                "kdy": "Příští sprint, sprint planning + daily"})
+        elif scope_pct_m >= 10:
+            observations.append({"type":"warn",
+                "title":f"Scope creep {scope_pct_m:g} % — {mid_count} top-level přidáno během sprintu",
+                "detail":("Mírné rozšíření. Zvaž, jestli to byly opravdu nutné věci, nebo by se "
+                          "daly odložit do dalšího sprintu.")})
+
+    # ── RC bugy (release candidate) ────────────────────────────────────────────
+    if rc_count_m > 0:
+        rc_obs_type = ("bad"  if rc_share_m >= 25 else
+                       "warn" if rc_share_m >= 15 else
+                       "good")
+        observations.append({
+            "type": rc_obs_type,
+            "title": f"RC opravy — {rc_count_m} bugů, {rc_hours_m:g} h ({rc_share_m:g} % času sprintu)",
+            "detail": (f"Z RC testování vzešlo {rc_count_m} bugů, oprava trvala {rc_hours_m:g} h. "
+                       + ("Nad 25 % je vážný signál — kvalita pre-RC vývoje vyžaduje pozornost."
+                          if rc_share_m >= 25 else
+                          "15–25 % naznačuje, že RC odhaluje víc než drobnosti — proberte v retro."
+                          if rc_share_m >= 15 else
+                          "Podíl je v zdravém pásmu — RC ladění proběhlo bez velkého dopadu."))
+        })
+        if rc_share_m >= 15:
+            actions.append({
+                "akce": "Zaveď retro téma: proč RC odhaluje to, co by měl development cyklus zachytit dřív",
+                "meritko": f"Cíl: pod 15 % času na RC opravy (aktuálně {rc_share_m:g} %)",
+                "kdy": "Retrospektiva + příští sprint"})
+
+    # ── Fallback pokud žádný problém ───────────────────────────────────────────
     if not observations:
         observations.append({"type":"good",
             "title":"Sprint proběhl zdravě",
-            "detail":"Metriky jsou v normě bez výrazných problémů."})
+            "detail":(f"Spillover {sr:g} %, Defect Rate {dr:.0f} %, "
+                      f"Bug Capacity {bug_share_pct:g} %. Všechny klíčové metriky v normě.")})
     if not actions:
-        actions.append({"akce":"Sleduj trend velocity přes více sprintů",
-            "meritko":"Cíl: stabilní velocity ±10%",
-            "kdy":"Průběžně"})
+        actions.append({
+            "akce": f"Drž commitment kolem {round(delivered_sp):g} SP — to je tvoje aktuální velocity",
+            "meritko": f"Cíl: stabilní dodávka {round(delivered_sp * 0.9):g}–{round(delivered_sp * 1.1):g} SP/sprint",
+            "kdy": "Průběžně, ověřuj přes 3–6 sprintů"})
 
     # ── Stat review ──
     def sri(metric, value, status, comment, missing=None):
@@ -1668,57 +1948,15 @@ def agile_expert_analysis(metrics, outlier_ids, sprint_goal, goal_result, mappin
         "Estimation Accuracy", "dle grafu níže", "ok",
         "Srovnáváme vykázaný čas s průměrem pro dané SP. Outliéři jsou zvýrazněni."))
 
-    # Předávání issues — koukáme do metrics (ne mapping), protože tam jsme spočítali rate.
-    if "assignee_change_count" not in mapping:
-        stat_review.append(sri(
-            "Předávání issues", "chybí data", "missing",
-            "Nelze sledovat bez assignee_change_count.",
-            "Přidej sloupec assignee_change_count do exportu."))
-    else:
-        h_count = metrics.get("issues_with_handoff", 0)
-        h_total = metrics.get("top_level_total", 0)
-        h_pct   = metrics.get("handoff_rate_pct", 0)
-        h_status = ("ok"   if h_pct <= 15 else
-                    "warn" if h_pct <= 30 else
-                    "bad")
-        stat_review.append(sri(
-            "Předávání issues",
-            f"{h_count} z {h_total} top-level ({h_pct} %)",
-            h_status,
-            ("Měříme reálné re-assigny (≥ 2 změny řešitele) jen u Story/Bug. "
-             "First-assignment None→Někdo se nepočítá. Pod 15 % je zdravé."),
-            ("Vysoký podíl předávání u top-level práce — prodlužuje cycle time. "
-             "Hledejte příčiny: nejasné ownership v plánování, blokátory, kapacita."
-             if h_status != "ok" else None)))
+    # Předávání issues / handoff — záměrně NEzobrazujeme.
+    # V týmu se na jednom issue přirozeně podílí dev + QA + design + …,
+    # takže reassign není signál problému, je to běžný flow.
 
-    # ── RC bugy: observation + stat review ──
-    # Threshold: <15 % = zdravé, 15–25 % = warn (kvalita pre-RC vývoje pozor),
-    # ≥ 25 % = bad (RC opravy ukrajují čtvrtinu+ sprintu).
+    # ── RC bugy: jen stat_review (observation+action je už zpracováno výše v nové analýze) ──
     rc_count_m = metrics.get("rc_count", 0)
     rc_hours_m = metrics.get("rc_hours", 0)
     rc_share_m = metrics.get("rc_share_pct", 0)
     if rc_count_m > 0:
-        rc_obs_type = ("bad"  if rc_share_m >= 25 else
-                       "warn" if rc_share_m >= 15 else
-                       "good")
-        observations.append({
-            "type": rc_obs_type,
-            "title": f"RC opravy — {rc_count_m} bugů, {rc_hours_m:g} h ({rc_share_m:g} % času sprintu)",
-            "detail": (f"Release candidate testing odhalil {rc_count_m} chyb, oprava zabrala "
-                       f"{rc_hours_m:g} h = {rc_share_m:g} % vykázaného času sprintu. "
-                       + ("Nad 25 % je vážný signál — kvalita pre-RC vývoje vyžaduje pozornost "
-                          "(přitvrdit code review, testovací pokrytí, dřívější QA)."
-                          if rc_share_m >= 25
-                          else "15–25 % naznačuje, že RC odhaluje víc než drobnosti — proberte v retro."
-                          if rc_share_m >= 15
-                          else "Podíl je v zdravém pásmu — RC ladění proběhlo bez velkého dopadu."))
-        })
-        if rc_share_m >= 15:
-            actions.append({
-                "akce": "Zaveď retro téma 'Co by RC bugy odhalilo dřív'",
-                "meritko": f"Cíl: snížit podíl RC času pod 15 % (aktuálně {rc_share_m:g} %)",
-                "kdy": "Příští retrospektiva"
-            })
         rc_stat_status = ("ok"   if rc_share_m < 15 else
                           "warn" if rc_share_m < 25 else
                           "bad")
@@ -1831,7 +2069,7 @@ with st.sidebar:
         ("🔄", "Tok subtasků",         "subtask-flow"),
         ("📉", "Burndown",             "burndown"),
         ("⚠️", "Nedokončené issues",   "spillover"),
-        ("🚨", "RC bugy",              "rc-bugy"),
+        ("🔥", "RC bugy",              "rc-bugy"),
         ("⏱",  "Vykázaný čas",        "cas"),
         ("📐", "Estimation per SP",    "estimation"),
         ("🧠", "Agile Expert",         "expert"),
@@ -1972,29 +2210,8 @@ if "sprint_start" in mapping and not df[mapping["sprint_start"]].dropna().empty:
 if "sprint_end" in mapping and not df[mapping["sprint_end"]].dropna().empty:
     sprint_end = parse_date(df[mapping["sprint_end"]].dropna().iloc[0])
 
-if "sprint" in mapping and not df[mapping["sprint"]].dropna().empty:
-    sprint_name = df[mapping["sprint"]].dropna().iloc[0]
-elif sprint_start and sprint_end:
-    sprint_name = f"{sprint_start.strftime('%d.%m')} – {sprint_end.strftime('%d.%m')}"
-else:
-    sprint_name = "Sprint"
-duration     = (f"{sprint_start.strftime('%d.%m')} – {sprint_end.strftime('%d.%m.%Y')}"
-                if sprint_start and sprint_end else "—")
-total_issues = metrics.get("total_count", len(issues_df))
-
-# Sprint info pills
-st.markdown(f"""
-<div style="display:flex;gap:8px;margin-bottom:1.6rem;flex-wrap:wrap;">
-  <div class="s-pill"><span class="s-pill-label">Sprint</span>
-    <span class="s-pill-val">{sprint_name}</span></div>
-  <div class="s-pill"><span class="s-pill-label">Období</span>
-    <span class="s-pill-val">{duration}</span></div>
-  <div class="s-pill"><span class="s-pill-label">Issues</span>
-    <span class="s-pill-val">{total_issues}</span></div>
-  <div class="s-pill"><span class="s-pill-label">Soubor</span>
-    <span class="s-pill-val" style="color:#16a34a;">✓ {hl.escape(uploaded.name)}</span></div>
-</div>
-""", unsafe_allow_html=True)
+# Sprint info pills (Sprint / Období / Issues / Soubor) odstraněny — nepřidávaly hodnotu,
+# zabíraly místo. Sprint name je vidět v Sprint Goal sekci jako badge "Načteno z JIRY".
 
 
 # ─────────────────────────────────────────────
@@ -2022,75 +2239,81 @@ def _parse_jira_goal(raw):
 
 _goal_from_jira, _goal_extra = _parse_jira_goal(_goal_raw_jira)
 
-# Pokud goal v JIŘE bývá číslované odrážky (multi-line), používáme text_area.
-sprint_goal = st.text_area(
-    "Cíl sprintu (sprint goal)",
-    value=_goal_from_jira,
-    placeholder=("Např:\n1. Dodat nový checkout flow\n"
-                 "2. Opravit top 3 RC bugy\n"
-                 "3. Migrace na nové API"),
-    height=130,
-    label_visibility="visible",
-).strip()
-
-# Drobný badge — odkud goal pochází
-if _goal_from_jira and sprint_goal == _goal_from_jira:
-    _src_label = f"Načteno z JIRY · {_sprint_name_jira}" if _sprint_name_jira else "Načteno z JIRY"
-    _src_color = "#3730a3"
-    _src_bg    = "#eef2ff"
-elif sprint_goal:
-    _src_label = "Ručně upraveno"
-    _src_color = "#854f0b"
-    _src_bg    = "#fef3c7"
+# Pokud máme goal z JIRY → ukážeme jen finální kartu (bez editovatelného inputu).
+# Pokud chybí (žádný JSON / prázdný goal) → fallback s text_area, ať se dá doplnit ručně.
+if _goal_from_jira:
+    sprint_goal = _goal_from_jira
 else:
-    _src_label = ("Goal v JIŘE prázdný — doplň ručně"
-                  if _meta else "Sprint goal zatím nezadán")
-    _src_color = "#6b6359"
-    _src_bg    = "#f2ede6"
+    sprint_goal = st.text_area(
+        "Cíl sprintu (sprint goal)",
+        value="",
+        placeholder=("Např:\n1. Dodat nový checkout flow\n"
+                     "2. Opravit top 3 RC bugy\n"
+                     "3. Migrace na nové API"),
+        height=130,
+        label_visibility="visible",
+    ).strip()
 
-# Source badge + volitelný "extra" badge (typicky "Daily vede 😴 Matěj")
-_badges_html = (
-    f'<span style="display:inline-block;font-size:.72rem;font-family:\'DM Mono\',monospace;'
-    f'color:{_src_color};background:{_src_bg};padding:.18rem .55rem;border-radius:99px;'
-    f'letter-spacing:.04em;">'
-    f'{_src_label}</span>'
-)
-if _goal_extra and sprint_goal == _goal_from_jira:
-    # Krátké info navíc z JIRY (např. daily lead). Esc HTML, zachovat emoji.
-    _extra_clean = hl.escape(_goal_extra)
-    _badges_html += (
-        f'<span style="display:inline-block;font-size:.72rem;font-family:\'DM Sans\',sans-serif;'
-        f'color:#5c5449;background:#fffef9;border:1.5px solid #e8e3d8;'
-        f'padding:.18rem .6rem;border-radius:99px;margin-left:.4rem;">'
-        f'{_extra_clean}</span>'
-    )
-st.markdown(
-    f'<div style="margin:-.5rem 0 .9rem;display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;">'
-    f'{_badges_html}</div>',
-    unsafe_allow_html=True,
-)
+# Manuální potvrzení splnění — uloženo v session_state, drží se přes refreshy.
+# Hodnoty: None | "achieved" | "missed"
+if "goal_status_manual" not in st.session_state:
+    st.session_state["goal_status_manual"] = None
 
+# Auto-vyhodnocení z metrik (ponecháváme pro Agile Expert / retro logiku)
 goal_result = assess_sprint_goal(sprint_goal, metrics)
 
-if sprint_goal and goal_result:
-    status, label = goal_result
-    css_class = {"achieved":"goal-achieved","partial":"goal-partial","missed":"goal-missed"}[status]
+# Manuální stav má prioritu před auto-eval
+manual = st.session_state["goal_status_manual"]
+
+if sprint_goal:
+    # Modifier class pro goal-box podle manuálního výběru
+    box_modifier = ""
+    if manual == "achieved":
+        box_modifier = " is-achieved"
+    elif manual == "missed":
+        box_modifier = " is-missed"
+
+    # Status badge: pokud manuální, ukáž jeho; jinak fallback na auto-eval (jen visual hint)
+    if manual == "achieved":
+        badge_html = '<span class="goal-achieved">✓ Cíl splněn</span>'
+    elif manual == "missed":
+        badge_html = '<span class="goal-missed">✗ Cíl nesplněn</span>'
+    else:
+        badge_html = ""  # Před manuální volbou žádný badge — místo něj buttony pod boxem
+
     st.markdown(f"""
-    <div class="goal-box">
+    <div class="goal-box{box_modifier}">
       <div class="goal-label">Sprint Goal</div>
       <div class="goal-text">{hl.escape(sprint_goal)}</div>
-      <span class="{css_class}">{label}</span>
+      {badge_html}
       <div style="font-size:.74rem;color:#a39e96;margin-top:.6rem;font-family:'DM Mono',monospace;">
-        ⓘ Orientační vyhodnocení z metrik. Finální posouzení patří na sprint review.
+        ⓘ Označení provádí scrum master na začátku retra.
       </div>
     </div>
     """, unsafe_allow_html=True)
-elif not sprint_goal:
+
+    # Buttony / Změnit
+    if manual is None:
+        bc1, bc2, _ = st.columns([1, 1, 5])
+        with bc1:
+            if st.button("✓ Splněno", key="goal_status_yes", use_container_width=True):
+                st.session_state["goal_status_manual"] = "achieved"
+                st.rerun()
+        with bc2:
+            if st.button("✗ Nesplněno", key="goal_status_no", use_container_width=True):
+                st.session_state["goal_status_manual"] = "missed"
+                st.rerun()
+    else:
+        if st.button("Změnit hodnocení", key="goal_status_reset"):
+            st.session_state["goal_status_manual"] = None
+            st.rerun()
+
+if not sprint_goal:
     st.markdown("""
     <div style="background:#fff8f0;border:1.5px solid #fdba74;border-radius:13px;
                 padding:.9rem 1.2rem;margin-bottom:1rem;font-size:.84rem;color:#9a3412;">
       ⚠️ <strong>Sprint goal chybí</strong> — bez cíle nevíme zda sprint byl úspěšný.
-      Zadej ho výše.
+      Doplň ho výše nebo nastav v JIŘE.
     </div>
     """, unsafe_allow_html=True)
 
@@ -2139,7 +2362,7 @@ st.markdown(f"""
 
   <!-- SP rozpad -->
   <div style="display:flex;gap:1.6rem;flex-wrap:wrap;justify-content:center;width:100%;
-              padding-top:1rem;border-top:1px dashed #e8e3d8;">
+              padding-top:1rem;border-top:1px solid #e8e3d8;">
     <div style="text-align:center;min-width:120px;">
       <div style="font-size:.64rem;font-family:'DM Mono',monospace;color:#a39e96;
                   text-transform:uppercase;letter-spacing:.08em;">Naplánováno</div>
@@ -2191,28 +2414,13 @@ with c2:
     st.metric(
         "Bug Capacity",
         f"{bug_cap:g} SP",
-        delta=f"{bug_share:g} % z celku" if bug_share else None,
-        delta_color="off",
         help=("Dodané SP na opravách Bugů. Vysoký podíl = velký technický dluh "
               "a méně kapacity na nové features. Zdravé: pod ~20 % z celkové práce."),
     )
 with c3:
-    sp_spilled = metrics.get("spillover_sp", 0)
-    sp_top_total_planned = metrics.get("spillover_sp_total", 0)
-    n_spilled = sr_top_total - sr_top_done if sr_top_total else 0
-    # Sub-text v delta: současně počet issues i SP (kontextová info pod hlavním %)
-    if sr_top_total:
-        if sp_top_total_planned > 0:
-            _spill_delta = f"{n_spilled} z {sr_top_total} issues · {sp_spilled:g} z {sp_top_total_planned:g} SP"
-        else:
-            _spill_delta = f"{n_spilled} z {sr_top_total} top-level"
-    else:
-        _spill_delta = None
     st.metric(
         "Spillover",
         f"{sr_val}%",
-        delta=_spill_delta,
-        delta_color="off",
         help=("Procento nedodaných Story Points top-level Story+Bug. "
               "Měříme dopad práce, ne počet issues — 0 SP bug, který přepadl, "
               "spillover nepenalizuje (SP-based, konzistentní s Plán vs Dodáno). "
@@ -2223,9 +2431,6 @@ with c4:
     st.metric(
         "Defect Rate",
         f"{dr_val:.0f}%" if dr_val is not None else "—",
-        delta=(f"{defect_count} BugSubtask / {story_sp_planned:g} Story SP"
-               if story_sp_planned else None),
-        delta_color="off",
         help=("Kvalita nových features: BugSubtasky (chyby z testování stories) / "
               "součet Story SP × 100. Normalizováno na velikost práce — "
               "Story s 1 SP a 13 SP jsou férově srovnány. "
@@ -2286,14 +2491,16 @@ if subtask_flow and subtask_flow["states"]:
     if prog_pct < 30:
         tooltip_per_state["progress"] = (
             f"Aktivní vývoj zabírá jen {prog_pct:g} % — flow efficiency "
-            "je nízká, většina času je čekání nebo handoff."
+            "je nízká, většina času je čekání nebo přechody mezi stavy."
         )
 
     def _tooltip_for(state):
+        # Vrací JEDNŘÁDKOVÝ řetězec — nesmí být '\n', jinak Streamlit markdown
+        # rozdělí HTML kolem title atributu a HTML se renderuje jako plain text.
         base = f'{state["label"]} — {state["share_pct"]:g} %, median {state["median"]:g} h'
         extra = tooltip_per_state.get(state["key"])
         if extra:
-            return f'{base}\n\n{extra}'
+            return f'{base} — {extra}'
         return base
 
     # Stacked horizontal bar (s tooltipy nesoucími insighty)
@@ -2301,7 +2508,8 @@ if subtask_flow and subtask_flow["states"]:
     legend_items = ""
     for s in sf_states:
         bg, fg = sf_colors.get(s["key"], ("#D3D1C7", "#2C2C2A"))
-        tip = _tooltip_for(s).replace('"', '&quot;')
+        # HTML escape kvůli zalomení atributu (zejména uvozovky) + strip newline jistota
+        tip = hl.escape(_tooltip_for(s).replace("\n", " "), quote=True)
         if s["share_pct"] > 0:
             bar_segments += (
                 f'<div style="background:{bg};color:{fg};width:{s["share_pct"]}%;'
@@ -2320,14 +2528,8 @@ if subtask_flow and subtask_flow["states"]:
     st.markdown(f"""
     <div style="background:#fffef9;border:1.5px solid #e8e3d8;border-radius:14px;
                 padding:1.3rem 1.6rem;margin-bottom:1rem;">
-      <div style="display:flex;justify-content:space-between;align-items:baseline;
+      <div style="display:flex;justify-content:flex-end;align-items:baseline;
                   flex-wrap:wrap;gap:.5rem;margin-bottom:.7rem;">
-        <div style="font-size:.84rem;color:#5c5449;">
-          Median času ve stavech, počítáno jen v okně sprintu.
-          <span style="color:#a39e96;font-size:.76rem;">
-            (najeď myší na barevný segment pro detail)
-          </span>
-        </div>
         <div style="font-size:.74rem;font-family:'DM Mono',monospace;color:#a39e96;">
           n = {sf_n} aktivních Sub-tasků · suma {sf_total:.0f} h
         </div>
@@ -2342,26 +2544,18 @@ if subtask_flow and subtask_flow["states"]:
     </div>
     """, unsafe_allow_html=True)
 
-    # ── Karty místo tabulky (jeden řádek, sloupce podle počtu reálných stavů) ──
+    # ── Karty (style sladěn s hlavními dlaždicemi nahoře — viz CSS třídy .flow-card*) ──
     cards_html = ""
     for s in sf_states:
-        bg, fg = sf_colors.get(s["key"], ("#D3D1C7", "#2C2C2A"))
+        bg, _ = sf_colors.get(s["key"], ("#D3D1C7", "#2C2C2A"))
         cards_html += (
-            '<div style="flex:1 1 0;min-width:160px;background:#fffef9;'
-            'border:1.5px solid #e8e3d8;border-radius:14px;padding:1.1rem 1rem .9rem;'
-            'display:flex;flex-direction:column;align-items:center;text-align:center;'
-            'overflow:hidden;position:relative;">'
-            '<div style="font-size:.82rem;color:#5c5449;font-weight:500;'
-            'margin-bottom:.85rem;letter-spacing:.01em;">'
-            f'{s["label"]}</div>'
-            '<div style="font-size:2.4rem;font-family:\'DM Serif Display\',serif;'
-            'color:#2c2922;font-weight:500;line-height:1;margin-bottom:.6rem;'
-            'font-variant-numeric:tabular-nums;">'
-            f'{s["median"]:g}</div>'
-            '<div style="font-size:.74rem;color:#a39e96;font-family:\'DM Mono\',monospace;'
-            'margin-bottom:.95rem;letter-spacing:.04em;">'
-            'h (medián)</div>'
-            f'<div style="position:absolute;left:0;right:0;bottom:0;height:6px;background:{bg};"></div>'
+            '<div class="flow-card">'
+            f'<div class="flow-card-label">{s["label"]}</div>'
+            f'<div class="flow-card-value">{s["median"]:g}'
+            '<span class="flow-card-unit">h</span>'
+            '</div>'
+            '<div class="flow-card-sub">medián</div>'
+            f'<div class="flow-card-strip" style="background:{bg};"></div>'
             '</div>'
         )
 
@@ -2382,7 +2576,7 @@ section("📉", "Burndown chart")
 if sprint_start and sprint_end:
     fig_bd, remaining_pct = draw_burndown(issues_df, mapping, sprint_start, sprint_end)
     if fig_bd:
-        st.pyplot(fig_bd, use_container_width=True)
+        render_chart_svg(fig_bd)
         plt.close(fig_bd)
         # Metrika "na konci sprintu zbývalo X %" odstraněna — info je už v grafu samotném.
 else:
@@ -2395,7 +2589,13 @@ else:
 
 if metrics.get("spillover_count", 0) > 0:
     st.markdown('<div id="spillover"></div>', unsafe_allow_html=True)
-    section("⚠️", f"Nedokončené issues — {metrics['spillover_count']} {'přešla' if metrics['spillover_count'] == 1 else 'přešly' if 2 <= metrics['spillover_count'] <= 4 else 'přešlo'} do dalšího sprintu")
+    # Český gramatický shoda: "issue" jako střední rod (to issue, ta issues).
+    #   1     → přešlo (n. sg.)
+    #   2–4   → přešla (n. pl.)
+    #   5+    → přešlo (zápor / genitiv pl.)
+    _sc = metrics["spillover_count"]
+    _verb = "přešlo" if _sc == 1 else "přešla" if 2 <= _sc <= 4 else "přešlo"
+    section("⚠️", f"Nedokončené issues — {_sc} {_verb} do dalšího sprintu")
 
     id_col     = mapping.get("id", df.columns[0])
     type_col   = mapping.get("type")
@@ -2419,17 +2619,15 @@ if metrics.get("spillover_count", 0) > 0:
         d = spill_issues[list(show_cols.keys())].rename(columns=show_cols).fillna("—").astype(str)
         # ⭐ Označení mid-sprint issues
         d["Mid-sprint"] = d["Issue"].apply(lambda x: "⭐" if x in mid_sprint_ids else "")
-        st.markdown(htable(d, spillover_ids=spill_issues[id_col].astype(str).tolist()),
-                    unsafe_allow_html=True)
-        total_spill_sp = (
-            pd.to_numeric(spill_issues.get(sp_col, pd.Series([0])), errors="coerce").fillna(0).sum()
-            if sp_col else 0)
-        st.markdown(
-            f"<div style='font-size:.74rem;color:#a39e96;margin-top:.55rem;"
-            f"font-family:DM Mono,monospace;'>Celkem {int(total_spill_sp)} SP přešlo dál"
-            + (" &nbsp;·&nbsp; ⭐ = přidáno po startu sprintu" if any(d["Mid-sprint"] == "⭐") else "")
-            + "</div>",
-            unsafe_allow_html=True)
+        htable_paged(d, key="spillover",
+                     spillover_ids=spill_issues[id_col].astype(str).tolist())
+        # "Celkem X SP přešlo dál" odstraněno — info je v dlaždici Spillover nahoře.
+        # Pokud je v tabulce mid-sprint hvězdička, zobrazíme jen vysvětlivku.
+        if any(d["Mid-sprint"] == "⭐"):
+            st.markdown(
+                "<div style='font-size:.74rem;color:#a39e96;margin-top:.55rem;"
+                "font-family:DM Mono,monospace;'>⭐ = přidáno po startu sprintu</div>",
+                unsafe_allow_html=True)
 
 # ── Mid-sprint přidané issues (scope creep — jen Story+Bug, Fix #4) ──
 mid_count = metrics.get("mid_sprint_count", 0)
@@ -2438,20 +2636,8 @@ scope_pct = metrics.get("scope_creep_pct", 0)
 if mid_count > 0 or mid_all_count > 0:
     mid_ids = metrics.get("mid_sprint_ids", [])
     mid_issues_df = issues_df[issues_df[id_col].astype(str).isin(mid_ids)]
-    section("⭐", f"Scope creep — {mid_count} top-level {'Story/Bug přidán' if mid_count == 1 else 'Story/Bug přidáno'} po startu sprintu ({scope_pct} %)")
-    subtask_extra = max(mid_all_count - mid_count, 0)
-    extra_note = (
-        f"<br><span style='color:#a39e96;'>+ {subtask_extra} subtask"
-        f"{'y' if subtask_extra != 1 else ''} vznikly v průběhu (přirozená dekompozice — "
-        f"do scope creep se nepočítají).</span>"
-        if subtask_extra > 0 else ""
-    )
-    st.markdown(f"""<div style="background:#fffbf0;border:1px solid #f0d090;border-radius:11px;
-padding:.75rem 1rem;margin-bottom:.8rem;font-size:.82rem;color:#7a5c00;">
-⭐ Skutečný scope creep — top-level Story/Bug přidané po zahájení sprintu.
-Signalizují neplánovanou práci nebo rozšiřování plánu během sprintu.
-Cíl: pod 10 % top-level work.{extra_note}
-</div>""", unsafe_allow_html=True)
+    section("📈", f"Scope creep — {mid_count} top-level {'Story/Bug přidán' if mid_count == 1 else 'Story/Bug přidáno'} po startu sprintu ({scope_pct} %)")
+    # Vysvětlující info box odstraněn — popisek je už v nadpisu sekce.
     if not mid_issues_df.empty:
         show_mid = {id_col: "Issue"}
         if type_col and type_col in mid_issues_df.columns: show_mid[type_col] = "Typ"
@@ -2463,7 +2649,7 @@ Cíl: pod 10 % top-level work.{extra_note}
         dm = mid_issues_df[list(show_mid.keys())].rename(columns=show_mid).fillna("—").astype(str)
         if "Přidáno" in dm.columns:
             dm["Přidáno"] = dm["Přidáno"].apply(lambda x: x[:10] if len(x) >= 10 else x)
-        st.markdown(htable(dm), unsafe_allow_html=True)
+        htable_paged(dm, key="scope_creep")
 
 
 # ─────────────────────────────────────────────
@@ -2473,7 +2659,7 @@ Cíl: pod 10 % top-level work.{extra_note}
 # ─────────────────────────────────────────────
 
 st.markdown('<div id="rc-bugy"></div>', unsafe_allow_html=True)
-section("🚨", "RC bugy — release candidate fixy ve sprintu")
+section("🔥", "RC bugy — release candidate fixy ve sprintu")
 
 _rc_id_col      = mapping.get("id")
 _rc_type_col    = mapping.get("type")
@@ -2554,18 +2740,7 @@ else:
                         "Pod 15 % zdravé, 15–25 % pozor, nad 25 % vážné — "
                         "kvalita pre-RC vývoje vyžaduje pozornost."))
 
-    # Indikátor pásma
-    band_label = ("Vysoký podíl RC oprav" if rc_share >= 25
-                  else "Střední podíl RC oprav" if rc_share >= 15
-                  else "Zdravý podíl RC oprav")
-    st.markdown(
-        f'<div style="margin:.4rem 0 1rem;display:inline-block;'
-        f'font-size:.74rem;font-family:\'DM Mono\',monospace;color:{rc_color};'
-        f'background:#fffef9;border:1.5px solid {rc_color}33;padding:.22rem .65rem;'
-        f'border-radius:99px;letter-spacing:.04em;">'
-        f'{band_label}</div>',
-        unsafe_allow_html=True,
-    )
+    # Indikátor pásma odstraněn — info je už v help tooltipu na dlaždici "% času sprintu".
 
     # ── Tabulka všech RC bugů ──
     done_kw_rc = ["done", "closed", "resolved", "to release", "to merge"]
@@ -2593,7 +2768,7 @@ else:
             rc_view = rc_view.sort_values("Vykázáno (h)", ascending=False)
 
         rc_view = rc_view.fillna("—").astype(str)
-        st.markdown(htable(rc_view), unsafe_allow_html=True)
+        htable_paged(rc_view, key="rc_bugs")
 
 
 # ─────────────────────────────────────────────
@@ -2603,21 +2778,53 @@ else:
 st.markdown('<div id="cas"></div>', unsafe_allow_html=True)
 section("⏱", "Vykázaný čas")
 
-fig_type = draw_time_by_type(df, mapping)
-if fig_type:
-    # Koláč na plnou šířku (bez bočních paddingů), výraznější vizuál
+_time_result = draw_time_by_type(df, mapping)
+if _time_result and _time_result[0] is not None:
+    fig_type, _time_stats = _time_result
+    # Variant B: donut nahoře vycentrovaný + 3 dlaždice (jeden typ per dlaždice) pod ním
+    _, tc_mid, _ = st.columns([1, 2, 1])
+    with tc_mid:
+        render_chart_svg(fig_type)
+        plt.close(fig_type)
+
+    # Dlaždice per typ — sladěné s hlavními st.metric tilemi (label uppercase Mono,
+    # hodnota Serif Display, sub-text Mono malý šedý) + barevný proužek nahoře.
+    cards_html = ""
+    for s in _time_stats:
+        cards_html += (
+            '<div style="flex:1 1 0;min-width:160px;background:#fffef9;'
+            'border:1.5px solid #e8e3d8;border-radius:14px;padding:1rem 1.1rem 1.2rem;'
+            'box-shadow:2px 3px 0 #e0dbd2;'
+            'display:flex;flex-direction:column;align-items:center;text-align:center;'
+            'overflow:hidden;position:relative;">'
+            # Top color strip (matches the slice color)
+            f'<div style="position:absolute;left:0;right:0;top:0;height:6px;background:{s["color"]};"></div>'
+            # Label
+            '<div style="font-family:\'DM Mono\',monospace;font-size:.68rem;'
+            'color:#a39e96;text-transform:uppercase;letter-spacing:.07em;'
+            'margin:.35rem 0 .4rem;">'
+            f'{hl.escape(s["label"])}</div>'
+            # Hours (Serif Display, jako hlavní dlaždice — 1.8rem)
+            '<div style="font-family:\'DM Serif Display\',serif;font-size:1.8rem;'
+            'color:#2c2922;font-weight:500;line-height:1.1;'
+            'font-variant-numeric:tabular-nums;font-feature-settings:\'tnum\';'
+            'margin:.1rem 0 .15rem;">'
+            f'{s["hours"]:.0f}'
+            '<span style="font-family:\'DM Mono\',monospace;font-size:.7rem;'
+            'color:#a39e96;margin-left:.25rem;font-weight:400;">h</span>'
+            '</div>'
+            # Percentage sub-text
+            '<div style="font-family:\'DM Mono\',monospace;font-size:.75rem;'
+            'color:#a39e96;">'
+            f'{s["pct"]:.0f} % z celku'
+            '</div>'
+            '</div>'
+        )
     st.markdown(
-        "<div style='font-size:.65rem;color:#a39e96;text-align:center;margin-bottom:.6rem;"
-        "font-family:DM Mono,monospace;text-transform:uppercase;letter-spacing:.08em;'>"
-        "Vykázaný čas podle typu issue</div>",
-        unsafe_allow_html=True)
-    # Zvětšení figure (předpokládáme matplotlib figure z draw_time_by_type)
-    try:
-        fig_type.set_size_inches(11, 6.5)
-    except Exception:
-        pass
-    st.pyplot(fig_type, use_container_width=True)
-    plt.close(fig_type)
+        f'<div style="display:flex;gap:.9rem;flex-wrap:wrap;margin-top:.4rem;">'
+        f'{cards_html}</div>',
+        unsafe_allow_html=True,
+    )
 else:
     st.info("Chybí data o časech.")
 
@@ -2636,38 +2843,40 @@ section("📐", "Přesnost odhadů — vykázaný čas vs. průměr pro dané SP
 
 fig_est, outlier_table = draw_estimation_by_sp(df, mapping)
 if fig_est:
-    st.pyplot(fig_est, use_container_width=True)
+    render_chart_svg(fig_est)
     plt.close(fig_est)
-    st.markdown("""
-    <div style="display:flex;gap:1.2rem;flex-wrap:wrap;margin-top:.55rem;">
-      <span style="font-size:.74rem;color:#5c5449;font-family:'DM Mono',monospace;
-                   display:flex;align-items:center;gap:5px;">
-        <span style="width:10px;height:10px;background:#fca5a5;display:inline-block;border-radius:2px;"></span>
-        výrazně podhodnoceno (&gt;130%)
-      </span>
-      <span style="font-size:.74rem;color:#5c5449;font-family:'DM Mono',monospace;
-                   display:flex;align-items:center;gap:5px;">
-        <span style="width:10px;height:10px;background:#fde68a;display:inline-block;border-radius:2px;"></span>
-        mírně podhodnoceno (110–130%)
-      </span>
-      <span style="font-size:.74rem;color:#5c5449;font-family:'DM Mono',monospace;
-                   display:flex;align-items:center;gap:5px;">
-        <span style="width:10px;height:10px;background:#93c5fd;display:inline-block;border-radius:2px;"></span>
-        v normě (90–110%)
-      </span>
-      <span style="font-size:.74rem;color:#5c5449;font-family:'DM Mono',monospace;
-                   display:flex;align-items:center;gap:5px;">
-        <span style="width:10px;height:10px;background:#86efac;display:inline-block;border-radius:2px;"></span>
-        rychleji než průměr (&lt;90%)
-      </span>
-    </div>
-    """, unsafe_allow_html=True)
+
+    # Legenda v stylu dashboardu — kruhové barevné dots, sans-serif text, lehký rámeček
+    legend_items = [
+        ("#fca5a5", "Výrazně podhodnoceno (> 130 %)"),
+        ("#fde68a", "Mírně podhodnoceno (110–130 %)"),
+        ("#93c5fd", "V normě (90–110 %)"),
+        ("#86efac", "Rychleji než průměr (< 90 %)"),
+    ]
+    legend_html = "".join(
+        '<span style="display:inline-flex;align-items:center;gap:.5rem;'
+        'font-size:.8rem;color:#5c5449;font-family:\'DM Sans\',sans-serif;">'
+        f'<span style="width:10px;height:10px;border-radius:99px;background:{c};'
+        'flex-shrink:0;"></span>'
+        f'{label}</span>'
+        for c, label in legend_items
+    )
+    st.markdown(
+        '<div style="display:flex;gap:1.4rem;flex-wrap:wrap;margin-top:.6rem;'
+        'background:#fffef9;border:1.5px solid #e8e3d8;border-radius:14px;'
+        'box-shadow:2px 3px 0 #e0dbd2;padding:.7rem 1.1rem;">'
+        f'{legend_html}</div>',
+        unsafe_allow_html=True,
+    )
+
     if outlier_table is not None and not outlier_table.empty:
+        # Heading sjednocen se zbytkem dashboardu (DM Mono uppercase šedý — jako tile labely)
         st.markdown(
-            "<div style='font-size:.78rem;color:#b91c1c;font-weight:600;margin:.9rem 0 .45rem;'>"
-            "Issues výrazně nad průměrem pro dané SP:</div>",
+            "<div style='font-family:DM Mono,monospace;font-size:.72rem;color:#a39e96;"
+            "text-transform:uppercase;letter-spacing:.07em;margin:1.1rem 0 .5rem;'>"
+            "Issues výrazně nad průměrem pro dané SP</div>",
             unsafe_allow_html=True)
-        st.markdown(htable(outlier_table), unsafe_allow_html=True)
+        htable_paged(outlier_table, key="estimation_outliers")
 else:
     st.info("Estimation accuracy není dostupná — chybí time_in_progress_h a story_points.")
 
