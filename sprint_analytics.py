@@ -651,14 +651,21 @@ def compute_metrics(df, mapping):
         total_top = int(top_mask.sum())
         done_top  = int((top_mask & issues["_done"]).sum())
 
+        # Pozn (Fix #7): spillover_rate se počítá v SP, ne v počtu issues, aby
+        # nebyl v rozporu s "Plán vs Dodáno" (taky SP-based). Jeden 0 SP bug,
+        # který se nezavřel, už nepenalizuje úspěšný SP-sprint. Počet issues
+        # držíme v spillover_count pro tabulku Nedokončené issues.
         metrics.update({
             "done_count":          done_top,
             "total_count":         total_top,
             "spillover_count":     total_top - done_top,
-            "spillover_rate":      round((total_top - done_top) / total_top * 100, 1) if total_top > 0 else 0,
-            # Sekundární — přes všechny issues (vč. subtasků), pro zpětnou kompatibilitu
-            "spillover_count_all": total_all - done_all,
-            "spillover_rate_all":  round((total_all - done_all) / total_all * 100, 1) if total_all > 0 else 0,
+            # Spillover rate (SP) vyplníme níže v bloku story_points, kde už máme SP top-level.
+            # Provizorní hodnota — přepíše se, pokud máme story_points mapping.
+            "spillover_rate":      0,
+            # Sekundární metriky — počet-based (zachováno pro porovnání / fallback)
+            "spillover_rate_count": round((total_top - done_top) / total_top * 100, 1) if total_top > 0 else 0,
+            "spillover_count_all":  total_all - done_all,
+            "spillover_rate_all":   round((total_all - done_all) / total_all * 100, 1) if total_all > 0 else 0,
         })
         if "story_points" in mapping:
             done_sp  = issues.loc[issues["_done"], "_sp"].sum()
@@ -702,6 +709,18 @@ def compute_metrics(df, mapping):
             metrics["bug_share_pct"] = (
                 round(bugs_delivered / total_main_delivered * 100, 1)
                 if total_main_delivered > 0 else 0
+            )
+
+            # ── Spillover (SP) — primární metrika spillover_rate ──
+            # Měříme dopad práce, ne počet. Konzistentní s "Plán vs Dodáno" (SP).
+            top_planned_sp   = stories_planned + bugs_planned
+            top_delivered_sp = stories_delivered + bugs_delivered
+            spillover_sp     = max(0.0, top_planned_sp - top_delivered_sp)
+            metrics["spillover_sp"]       = round(spillover_sp, 1)
+            metrics["spillover_sp_total"] = round(top_planned_sp, 1)
+            metrics["spillover_rate"] = (
+                round(spillover_sp / top_planned_sp * 100, 1)
+                if top_planned_sp > 0 else 0
             )
 
     # Fallback: pokud chybí status mapping, velocity stejně potřebujeme nastavit (committed SP)
@@ -1987,8 +2006,21 @@ section("🎯", "Sprint Goal")
 
 # ── Pre-fill z JIRA meta JSON (sprint_<ID>_MOB_meta.json vedle CSV) ──
 _meta = load_sprint_meta(uploaded)
-_goal_from_jira = (_meta.get("goal") or "").strip() if _meta else ""
+_goal_raw_jira = (_meta.get("goal") or "").strip() if _meta else ""
 _sprint_name_jira = (_meta.get("name") or "").strip() if _meta else ""
+
+# Parser: goal v JIŘE má formát "<vlastní cíl>--------------<info o daily/další meta>".
+# Ořezáváme před prvním blokem ≥ 4 pomlček. Rozumný fallback: pokud separator chybí,
+# vrátí raw text kompletní.
+def _parse_jira_goal(raw):
+    if not raw:
+        return ("", "")
+    m = re.split(r"-{4,}", raw, maxsplit=1)
+    goal_part = m[0].strip()
+    extra_part = m[1].strip() if len(m) > 1 else ""
+    return (goal_part, extra_part)
+
+_goal_from_jira, _goal_extra = _parse_jira_goal(_goal_raw_jira)
 
 # Pokud goal v JIŘE bývá číslované odrážky (multi-line), používáme text_area.
 sprint_goal = st.text_area(
@@ -2015,11 +2047,26 @@ else:
                   if _meta else "Sprint goal zatím nezadán")
     _src_color = "#6b6359"
     _src_bg    = "#f2ede6"
-st.markdown(
-    f'<div style="display:inline-block;font-size:.72rem;font-family:\'DM Mono\',monospace;'
+
+# Source badge + volitelný "extra" badge (typicky "Daily vede 😴 Matěj")
+_badges_html = (
+    f'<span style="display:inline-block;font-size:.72rem;font-family:\'DM Mono\',monospace;'
     f'color:{_src_color};background:{_src_bg};padding:.18rem .55rem;border-radius:99px;'
-    f'margin:-.5rem 0 .9rem;letter-spacing:.04em;">'
-    f'{_src_label}</div>',
+    f'letter-spacing:.04em;">'
+    f'{_src_label}</span>'
+)
+if _goal_extra and sprint_goal == _goal_from_jira:
+    # Krátké info navíc z JIRY (např. daily lead). Esc HTML, zachovat emoji.
+    _extra_clean = hl.escape(_goal_extra)
+    _badges_html += (
+        f'<span style="display:inline-block;font-size:.72rem;font-family:\'DM Sans\',sans-serif;'
+        f'color:#5c5449;background:#fffef9;border:1.5px solid #e8e3d8;'
+        f'padding:.18rem .6rem;border-radius:99px;margin-left:.4rem;">'
+        f'{_extra_clean}</span>'
+    )
+st.markdown(
+    f'<div style="margin:-.5rem 0 .9rem;display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;">'
+    f'{_badges_html}</div>',
     unsafe_allow_html=True,
 )
 
@@ -2150,14 +2197,26 @@ with c2:
               "a méně kapacity na nové features. Zdravé: pod ~20 % z celkové práce."),
     )
 with c3:
+    sp_spilled = metrics.get("spillover_sp", 0)
+    sp_top_total_planned = metrics.get("spillover_sp_total", 0)
+    n_spilled = sr_top_total - sr_top_done if sr_top_total else 0
+    # Sub-text v delta: současně počet issues i SP (kontextová info pod hlavním %)
+    if sr_top_total:
+        if sp_top_total_planned > 0:
+            _spill_delta = f"{n_spilled} z {sr_top_total} issues · {sp_spilled:g} z {sp_top_total_planned:g} SP"
+        else:
+            _spill_delta = f"{n_spilled} z {sr_top_total} top-level"
+    else:
+        _spill_delta = None
     st.metric(
         "Spillover",
         f"{sr_val}%",
-        delta=(f"{sr_top_total - sr_top_done} z {sr_top_total} top-level"
-               if sr_top_total else None),
+        delta=_spill_delta,
         delta_color="off",
-        help=("Procento nedokončených top-level Story+Bug (subtasky se nepočítají). "
-              "Říká: kolik z plánovaných featur jsme nezavřeli. Zdravé: pod 10 %."),
+        help=("Procento nedodaných Story Points top-level Story+Bug. "
+              "Měříme dopad práce, ne počet issues — 0 SP bug, který přepadl, "
+              "spillover nepenalizuje (SP-based, konzistentní s Plán vs Dodáno). "
+              "Zdravé: pod 10 %."),
     )
 with c4:
     # Defect Rate = BugSubtask / Story SP × 100  (normalizované na velikost práce)
