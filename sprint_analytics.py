@@ -276,13 +276,14 @@ section[data-testid="stFileUploader"] > label { display:none!important; }
 .dt td { font-family:'DM Sans',sans-serif!important; }
 /* Tabulka mono hodnoty (ID issues, technické štítky) */
 .dt .mono { font-family:'DM Mono',monospace!important; }
-/* Tabulka čísla — Mono + tabular-nums (desetinné čárky pod sebou).
+/* Tabulka čísla — DM Sans + tabular-nums (desetinné čárky pod sebou).
+   DM Sans = bez slashed-zero (na rozdíl od DM Mono), zachovává čitelnost.
    Třída na <td>, ne na <span>, jinak text-align na inline elementu nefunguje. */
 .dt td.num,
 .dt td.num span {
-  font-family:'DM Mono',monospace!important;
+  font-family:'DM Sans',sans-serif!important;
   font-variant-numeric:tabular-nums!important;
-  font-feature-settings:"tnum"!important;
+  font-feature-settings:"tnum","zero" 0!important;
   color:#2c2922!important;
 }
 /* Vyšší pravé i levé padding u číselných sloupců, ať se s následujícím sloupcem
@@ -387,11 +388,13 @@ div[data-testid="stAlert"]{
   justify-content:center!important;
 }
 [data-testid="stMetricLabel"] [data-testid="stTooltipHoverTarget"] {
-  width:14px!important;height:14px!important;
-  min-width:0!important;min-height:0!important;flex-shrink:0!important;
+  width:18px!important;height:18px!important;
+  min-width:18px!important;min-height:18px!important;
+  flex-shrink:0!important;overflow:visible!important;
+  display:inline-flex!important;align-items:center!important;justify-content:center!important;
 }
 [data-testid="stMetricLabel"] [data-testid="stTooltipHoverTarget"] svg {
-  width:12px!important;height:12px!important;
+  width:14px!important;height:14px!important;overflow:visible!important;
 }
 
 /* ── Tabs ── */
@@ -2509,43 +2512,53 @@ if subtask_flow and subtask_flow["states"]:
             return f'{base} — {extra}'
         return base
 
-    # Stacked horizontal bar (s tooltipy nesoucími insighty)
+    # Stacked horizontal bar — popisky uvnitř segmentů.
+    # min-width:90px zajistí že i úzký segment (např. Review 6%) udrží label
+    # v jednom řádku; ostatní segmenty se proporčně zmenší pro kompenzaci.
     bar_segments = ""
     legend_items = ""
     for s in sf_states:
         bg, fg = sf_colors.get(s["key"], ("#D3D1C7", "#2C2C2A"))
-        # HTML escape kvůli zalomení atributu (zejména uvozovky) + strip newline jistota
         tip = hl.escape(_tooltip_for(s).replace("\n", " "), quote=True)
         if s["share_pct"] > 0:
             bar_segments += (
                 f'<div style="background:{bg};color:{fg};width:{s["share_pct"]}%;'
-                f'display:flex;align-items:center;justify-content:center;'
-                f'font-size:.74rem;font-weight:600;height:36px;cursor:help;" '
+                'min-width:90px;display:flex;align-items:center;justify-content:center;'
+                'font-family:\'DM Sans\',sans-serif;font-size:.78rem;font-weight:600;'
+                'height:36px;cursor:help;white-space:nowrap;overflow:hidden;" '
                 f'title="{tip}">'
                 f'{s["label"]} {s["share_pct"]:.0f}%</div>'
             )
+        # Legenda: barevný puntík + label + procento (Mono pro číslo, tabular-nums)
         legend_items += (
-            f'<span style="display:inline-flex;align-items:center;gap:6px;'
-            f'font-size:.75rem;color:#5c5449;">'
-            f'<span style="width:10px;height:10px;border-radius:2px;background:{bg};"></span>'
-            f'{s["label"]}</span>'
+            '<span style="display:inline-flex;align-items:baseline;gap:.45rem;'
+            'font-size:.82rem;color:#2c2922;font-family:\'DM Sans\',sans-serif;">'
+            f'<span style="width:10px;height:10px;border-radius:99px;'
+            f'background:{bg};flex-shrink:0;align-self:center;"></span>'
+            f'{s["label"]}'
+            '<span style="font-family:\'DM Mono\',monospace;font-size:.78rem;'
+            'color:#a39e96;font-variant-numeric:tabular-nums;">'
+            f'{s["share_pct"]:.0f} %</span>'
+            '</span>'
         )
 
     st.markdown(f"""
     <div style="background:#fffef9;border:1.5px solid #e8e3d8;border-radius:14px;
-                padding:1.3rem 1.6rem;margin-bottom:1rem;">
+                padding:1.3rem 1.6rem;margin-bottom:1rem;overflow:hidden;">
       <div style="display:flex;justify-content:flex-end;align-items:baseline;
-                  flex-wrap:wrap;gap:.5rem;margin-bottom:.7rem;">
+                  flex-wrap:wrap;gap:.5rem;margin-bottom:.85rem;">
         <div style="font-size:.74rem;font-family:'DM Mono',monospace;color:#a39e96;">
           n = {sf_n} aktivních Sub-tasků · suma {sf_total:.0f} h
         </div>
       </div>
-      <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:.7rem;">
-        {legend_items}
-      </div>
-      <div style="display:flex;height:36px;border-radius:8px;overflow:hidden;
+      <!-- Bar uvnitř paddingu — kousek od kraje karty, plné rohy přes border-radius -->
+      <div style="display:flex;height:36px;overflow:hidden;
+                  margin-bottom:.9rem;border-radius:8px;
                   border:1px solid #e8e3d8;">
         {bar_segments}
+      </div>
+      <div style="display:flex;gap:1.4rem;flex-wrap:wrap;justify-content:center;">
+        {legend_items}
       </div>
     </div>
     """, unsafe_allow_html=True)
