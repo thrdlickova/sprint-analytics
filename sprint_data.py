@@ -12,7 +12,7 @@ jira = JIRA(
     server=os.getenv("JIRA_URL"),
     token_auth=os.getenv("JIRA_TOKEN")
 )
-SPRINT_ID = 3132
+SPRINT_ID = 3139
 STATUS_TODO = ["to do", "open", "new"]
 STATUS_INPROGRESS = ["in progress", "in development", "development"]
 STATUS_REVIEW = ["in review", "code review", "review"]
