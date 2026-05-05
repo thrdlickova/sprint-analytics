@@ -448,6 +448,34 @@ div[data-testid="stAlert"]{
   color:#6366f1;font-family:'DM Mono',monospace;margin-bottom:.4rem;
 }
 .goal-text{font-size:1rem;font-weight:400;color:#2c2922;line-height:1.5;font-family:'DM Serif Display',serif}
+/* Per-item goal karta — každý cíl má vlastní rámeček, číslo, text, status */
+.goal-item-card{
+  background:#fffef9;border:2px solid #93c5fd;border-radius:12px;
+  padding:.85rem 1.1rem;margin-bottom:.6rem;
+  box-shadow:2px 3px 0 #c7dff9;
+  display:flex;align-items:center;gap:.9rem;
+  transition:border-color .2s, box-shadow .2s;
+}
+.goal-item-card.is-achieved{
+  border-color:#86efac;box-shadow:2px 3px 0 #bbf7d0, 0 0 0 3px rgba(134,239,172,.18);
+}
+.goal-item-card.is-missed{
+  border-color:#fca5a5;box-shadow:2px 3px 0 #fecaca, 0 0 0 3px rgba(252,165,165,.18);
+}
+.goal-item-num{
+  font-family:'DM Mono',monospace;font-size:.78rem;color:#a39e96;
+  flex-shrink:0;width:24px;text-align:center;
+}
+.goal-item-text{
+  flex:1;font-family:'DM Serif Display',serif;font-size:1rem;color:#2c2922;
+  line-height:1.4;
+}
+.goal-item-badge{
+  flex-shrink:0;padding:3px 11px;border-radius:99px;font-size:.74rem;font-weight:500;
+  font-family:'DM Sans',sans-serif;
+}
+.goal-item-badge.is-achieved{background:#dcfce7;color:#15803d;border:1px solid #86efac;}
+.goal-item-badge.is-missed{background:#fee2e2;color:#b91c1c;border:1px solid #fca5a5;}
 .goal-achieved{display:inline-block;padding:3px 11px;border-radius:99px;font-size:.74rem;font-weight:500;margin-top:.5rem;background:#dcfce7;color:#15803d;border:1px solid #86efac}
 .goal-partial{display:inline-block;padding:3px 11px;border-radius:99px;font-size:.74rem;font-weight:500;margin-top:.5rem;background:#fef9c3;color:#a16207;border:1px solid #fde68a}
 .goal-missed{display:inline-block;padding:3px 11px;border-radius:99px;font-size:.74rem;font-weight:500;margin-top:.5rem;background:#fee2e2;color:#b91c1c;border:1px solid #fca5a5}
@@ -1388,8 +1416,9 @@ def draw_time_by_type(df, mapping):
     Vyrenderování side panelu řeší volající kód v HTML — takhle máme čistý
     chart bez vestavěné legendy (méně bordelu, víc vzduchu).
     """
-    type_col = mapping.get("type")
-    id_col   = mapping.get("id", df.columns[0])
+    type_col    = mapping.get("type")
+    id_col      = mapping.get("id", df.columns[0])
+    summary_col = mapping.get("summary")
     tc = [mapping.get(k) for k in
           ["time_todo","time_progress","time_review","time_testing","time_blocked"]
           if mapping.get(k) and mapping.get(k) in df.columns]
@@ -1398,14 +1427,32 @@ def draw_time_by_type(df, mapping):
 
     uniq = df.groupby(id_col).first().reset_index()
     uniq["_total_h"] = sum(pd.to_numeric(uniq[c], errors="coerce").fillna(0) for c in tc)
-    by_type = uniq.groupby(type_col)["_total_h"].sum().reset_index()
+
+    # Reklasifikace: Bug s [RC] prefixem v summary → vlastní kategorie "Bug RC".
+    # RC bugy se zakládají vždy jako Bug (ne BugSubtask). Tím se v koláči
+    # vizuálně oddělí plánované Bugy od neplánovaných RC oprav.
+    uniq["_cat"] = uniq[type_col].astype(str)
+    if summary_col and summary_col in uniq.columns:
+        rc_mask = (uniq["_cat"].str.lower() == "bug") & uniq[summary_col].astype(str)\
+            .str.strip().str.upper().str.startswith("[RC]")
+        uniq.loc[rc_mask, "_cat"] = "Bug RC"
+
+    by_type = uniq.groupby("_cat")["_total_h"].sum().reset_index()
     by_type = by_type[by_type["_total_h"] > 0]
+    by_type = by_type.rename(columns={"_cat": type_col})
     if by_type.empty:
         return None, None
 
-    # Teplá pastelová paleta bez šrafování
-    WARM_PIE = {"Story": "#c07860", "Bug": "#e8c4b0", "Bug Subtask": "#d4a898",
-                "BugSubtask": "#d4a898", "Sub-task": "#d4cfc6"}
+    # Teplá pastelová paleta bez šrafování. RC = výraznější červeno-okrová
+    # (oddělitelné od běžných pastelových bugů).
+    WARM_PIE = {
+        "Story":        "#c07860",   # cihla
+        "Bug":          "#e8c4b0",   # béžová
+        "Bug RC":       "#a04030",   # tmavě červená — odlišuje neplánované RC
+        "Bug Subtask":  "#d4a898",   # mírně tmavší béž
+        "BugSubtask":   "#d4a898",
+        "Sub-task":     "#d4cfc6",   # tlumená šedo-béž
+    }
     pie_colors = [WARM_PIE.get(t, "#d4cfc6") for t in by_type[type_col]]
     total_h    = float(by_type["_total_h"].sum())
 
@@ -2027,19 +2074,29 @@ def generate_retro_topics(metrics, outlier_ids, sprint_goal):
 if "uploaded_file" not in st.session_state:
     st.session_state["uploaded_file"] = None
 
-# ─── AUTO-LOAD: pokud vedle skriptu leží sprint CSV, načti ho automaticky ───
-if st.session_state["uploaded_file"] is None:
-    _script_dir = os.path.dirname(os.path.abspath(__file__))
-    _candidates = [
-        "sprint_3132_MOB.csv",
-        # případně další defaultní názvy do budoucna
-    ]
-    for _name in _candidates:
-        _path = os.path.join(_script_dir, _name)
-        if os.path.exists(_path):
-            st.session_state["uploaded_file"] = _LocalFile(_path)
-            st.session_state["auto_loaded"] = True
-            break
+# ─── AUTO-LOAD: najdi nejnovější sprint_*_MOB.csv vedle skriptu ─────────────
+# Při každém ukončeném sprintu stačí v sprint_data.py změnit SPRINT_ID a spustit;
+# tady se automaticky načte ten nejnovější soubor (podle modifikace).
+# Při každém rerunu kontrolujeme, jestli se mezitím neobjevil novější — pokud
+# ano, nahradíme cached _LocalFile za nejnovější. Manuální upload uživatele
+# (přes sidebar uploader) NEpřebijíme — pozná se podle nepřítomnosti _path.
+import glob as _glob
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+_matches = _glob.glob(os.path.join(_script_dir, "sprint_*_MOB.csv"))
+_newest_path = None
+if _matches:
+    _matches.sort(key=os.path.getmtime, reverse=True)
+    _newest_path = _matches[0]
+
+_current_uploaded = st.session_state["uploaded_file"]
+_current_path = getattr(_current_uploaded, "_path", None) if _current_uploaded else None
+_was_auto = st.session_state.get("auto_loaded", False)
+
+if _newest_path:
+    # Auto-load (poprvé nebo nahradit dřívější auto-load novějším souborem)
+    if _current_uploaded is None or (_was_auto and _current_path != _newest_path):
+        st.session_state["uploaded_file"] = _LocalFile(_newest_path)
+        st.session_state["auto_loaded"] = True
 
 # ─────────────────────────────────────────────
 # SIDEBAR + UPLOAD
@@ -2232,6 +2289,28 @@ def _parse_jira_goal(raw):
     extra_part = m[1].strip() if len(m) > 1 else ""
     return (goal_part, extra_part)
 
+# Goal v JIŘE typicky obsahuje víc očíslovaných cílů ("1, X 2, Y 3, Z" nebo
+# "1. X\n2. Y\n3. Z"). Parser je rozdělí na list jednotlivých položek.
+def _split_goal_items(goal_text):
+    if not goal_text:
+        return []
+    # 1) Nejdřív zkus rozdělit po řádcích — pokud má text víc řádků, každý je goal
+    lines = [l.strip(" \t·•-–") for l in goal_text.splitlines()]
+    lines = [l for l in lines if l]
+    if len(lines) >= 2:
+        return [_strip_goal_prefix(l) for l in lines]
+    # 2) Single-line text — rozděl před každým "<cislo>[,.) ] " patternem (ne první)
+    parts = re.split(r"\s+(?=\d+\s*[,.\)\]:]\s+\S)", goal_text)
+    parts = [p.strip() for p in parts if p.strip()]
+    if len(parts) >= 2:
+        return [_strip_goal_prefix(p) for p in parts]
+    # 3) Fallback — jeden goal
+    return [_strip_goal_prefix(goal_text.strip())]
+
+def _strip_goal_prefix(s):
+    """Odstraní úvodní číslování typu '1, ', '2. ', '3) ', '4: '."""
+    return re.sub(r"^\s*\d+\s*[,.\)\]:]\s*", "", s).strip()
+
 _goal_from_jira, _goal_extra = _parse_jira_goal(_goal_raw_jira)
 
 # Pokud máme goal z JIRY → ukážeme jen finální kartu (bez editovatelného inputu).
@@ -2249,65 +2328,90 @@ else:
         label_visibility="visible",
     ).strip()
 
-# Manuální potvrzení splnění — uloženo v session_state per sprint, takže když
-# uživatel nahraje jiný CSV (jiný sprint), volba se neudrží mezi sprinty.
+# Manuální potvrzení splnění — per item, uloženo v session_state per sprint.
+# Každý cíl má vlastní stav: None | "achieved" | "missed".
 _goal_sprint_key = (
     str(_meta.get("id") or _meta.get("name") or "")
     if _meta else
     (uploaded.name if uploaded else "default")
 )
-_goal_status_key = f"goal_status_manual::{_goal_sprint_key}"
-if _goal_status_key not in st.session_state:
-    st.session_state[_goal_status_key] = None
 
 # Auto-vyhodnocení z metrik (ponecháváme pro Agile Expert / retro logiku)
 goal_result = assess_sprint_goal(sprint_goal, metrics)
 
-# Manuální stav má prioritu před auto-eval
-manual = st.session_state[_goal_status_key]
-
 if sprint_goal:
-    # Modifier class pro goal-box podle manuálního výběru
-    box_modifier = ""
-    if manual == "achieved":
-        box_modifier = " is-achieved"
-    elif manual == "missed":
-        box_modifier = " is-missed"
+    _goal_items = _split_goal_items(sprint_goal)
 
-    # Status badge: pokud manuální, ukáž jeho; jinak fallback na auto-eval (jen visual hint)
-    if manual == "achieved":
-        badge_html = '<span class="goal-achieved">✓ Cíl splněn</span>'
-    elif manual == "missed":
-        badge_html = '<span class="goal-missed">✗ Cíl nesplněn</span>'
-    else:
-        badge_html = ""  # Před manuální volbou žádný badge — místo něj buttony pod boxem
+    st.markdown('<div style="font-family:\'DM Mono\',monospace;font-size:.65rem;'
+                'color:#6366f1;text-transform:uppercase;letter-spacing:.1em;'
+                'margin:.2rem 0 .55rem;">Sprint Goal</div>',
+                unsafe_allow_html=True)
 
-    st.markdown(f"""
-    <div class="goal-box{box_modifier}">
-      <div class="goal-label">Sprint Goal</div>
-      <div class="goal-text">{hl.escape(sprint_goal)}</div>
-      {badge_html}
-      <div style="font-size:.74rem;color:#a39e96;margin-top:.6rem;font-family:'DM Mono',monospace;">
-        ⓘ Označení provádí scrum master na začátku retra.
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
+    # Render per-item — každý cíl jako samostatná karta s vlastními buttony
+    _statuses = []  # ['achieved' / 'missed' / None] pro agregaci
+    for _idx, _item in enumerate(_goal_items):
+        _item_key = f"goal_item_status::{_goal_sprint_key}::{_idx}"
+        if _item_key not in st.session_state:
+            st.session_state[_item_key] = None
+        _item_status = st.session_state[_item_key]
+        _statuses.append(_item_status)
 
-    # Buttony / Změnit
-    if manual is None:
-        bc1, bc2, _ = st.columns([1, 1, 5])
-        with bc1:
-            if st.button("✓ Splněno", key=f"{_goal_status_key}_yes", use_container_width=True):
-                st.session_state[_goal_status_key] = "achieved"
+        # Modifier + badge podle stavu
+        if _item_status == "achieved":
+            _box_mod = " is-achieved"
+            _badge = '<span class="goal-item-badge is-achieved">✓ splněno</span>'
+        elif _item_status == "missed":
+            _box_mod = " is-missed"
+            _badge = '<span class="goal-item-badge is-missed">✗ nesplněno</span>'
+        else:
+            _box_mod = ""
+            _badge = ""
+
+        st.markdown(
+            f'<div class="goal-item-card{_box_mod}">'
+            f'<div class="goal-item-num">{_idx + 1}</div>'
+            f'<div class="goal-item-text">{hl.escape(_item)}</div>'
+            f'{_badge}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+        # Buttony pod kartou
+        if _item_status is None:
+            bc1, bc2, _spacer = st.columns([1, 1, 5])
+            with bc1:
+                if st.button("✓ Splněno", key=f"{_item_key}_yes", use_container_width=True):
+                    st.session_state[_item_key] = "achieved"
+                    st.rerun()
+            with bc2:
+                if st.button("✗ Nesplněno", key=f"{_item_key}_no", use_container_width=True):
+                    st.session_state[_item_key] = "missed"
+                    st.rerun()
+        else:
+            if st.button("Změnit", key=f"{_item_key}_reset"):
+                st.session_state[_item_key] = None
                 st.rerun()
-        with bc2:
-            if st.button("✗ Nesplněno", key=f"{_goal_status_key}_no", use_container_width=True):
-                st.session_state[_goal_status_key] = "missed"
-                st.rerun()
+
+    # Agregace per-item statusů → celkový sprint goal status (pro Agile Expert)
+    if all(s == "achieved" for s in _statuses):
+        _agg_status = "achieved"
+    elif all(s == "missed" for s in _statuses):
+        _agg_status = "missed"
+    elif any(s is None for s in _statuses):
+        _agg_status = None  # ještě nedoznačeno
     else:
-        if st.button("Změnit hodnocení", key=f"{_goal_status_key}_reset"):
-            st.session_state[_goal_status_key] = None
-            st.rerun()
+        _agg_status = "partial"  # mix achieved + missed
+    # Vystavíme do session_state pro downstream kód (Agile Expert atd.)
+    st.session_state[f"goal_status_manual::{_goal_sprint_key}"] = _agg_status
+
+    # Info pod celou sekcí
+    st.markdown(
+        '<div style="font-size:.74rem;color:#a39e96;margin:.4rem 0 1.2rem;'
+        'font-family:\'DM Mono\',monospace;">'
+        'ⓘ Označení provádí scrum master na začátku retra.'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
 if not sprint_goal:
     st.markdown("""
